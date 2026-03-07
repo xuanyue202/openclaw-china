@@ -1,3 +1,5 @@
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 
 function toTrimmedString(value: unknown): string | undefined {
@@ -38,6 +40,12 @@ const QQBotAccountSchema = z.object({
   longTaskNoticeDelayMs: z.number().int().min(0).optional().default(30000),
   maxFileSizeMB: z.number().positive().optional().default(100),
   mediaTimeoutMs: z.number().int().positive().optional().default(30000),
+  inboundMedia: z
+    .object({
+      dir: z.string().optional(),
+      keepDays: z.number().optional(),
+    })
+    .optional(),
 });
 
 // ── Top-level Schema (extends account with multi-account fields) ─────────────
@@ -47,8 +55,27 @@ export const QQBotConfigSchema = QQBotAccountSchema.extend({
   accounts: z.record(QQBotAccountSchema).optional(),
 });
 
-export type QQBotConfig = z.infer<typeof QQBotConfigSchema>;
-export type QQBotAccountConfig = z.infer<typeof QQBotAccountSchema>;
+export type QQBotConfig = z.input<typeof QQBotConfigSchema>;
+export type QQBotAccountConfig = z.input<typeof QQBotAccountSchema>;
+
+const DEFAULT_INBOUND_MEDIA_DIR = join(homedir(), ".openclaw", "media", "qqbot", "inbound");
+const DEFAULT_INBOUND_MEDIA_KEEP_DAYS = 7;
+const DEFAULT_INBOUND_MEDIA_TEMP_DIR = join(tmpdir(), "qqbot-media");
+
+export function resolveInboundMediaDir(config: QQBotAccountConfig | undefined): string {
+  return String(config?.inboundMedia?.dir ?? "").trim() || DEFAULT_INBOUND_MEDIA_DIR;
+}
+
+export function resolveInboundMediaKeepDays(config: QQBotAccountConfig | undefined): number {
+  const value = config?.inboundMedia?.keepDays;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : DEFAULT_INBOUND_MEDIA_KEEP_DAYS;
+}
+
+export function resolveInboundMediaTempDir(): string {
+  return DEFAULT_INBOUND_MEDIA_TEMP_DIR;
+}
 
 // ── PluginConfig interface ────────────────────────────────────────────────────
 

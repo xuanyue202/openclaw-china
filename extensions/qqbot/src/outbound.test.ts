@@ -40,6 +40,27 @@ describe("qqbotOutbound event_id fallback", () => {
     mocks.getAccessToken.mockResolvedValue("token-1");
   });
 
+  it("forces plain text for group messages even when markdown support is enabled", async () => {
+    mocks.sendGroupMessage.mockResolvedValueOnce({ id: "group-text-1", timestamp: 1 });
+
+    const result = await qqbotOutbound.sendText({
+      cfg: baseCfg,
+      to: "group:g-plain",
+      text: "hello group",
+      replyToId: "msg-plain-1",
+    });
+
+    expect(result).toEqual({ channel: "qqbot", messageId: "group-text-1", timestamp: 1 });
+    expect(mocks.sendGroupMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupOpenid: "g-plain",
+        content: "hello group",
+        messageId: "msg-plain-1",
+        markdown: false,
+      })
+    );
+  });
+
   it("retries group text with event_id when msg_id is expired", async () => {
     mocks.sendGroupMessage
       .mockRejectedValueOnce(
@@ -63,9 +84,11 @@ describe("qqbotOutbound event_id fallback", () => {
     expect(mocks.sendGroupMessage).toHaveBeenCalledTimes(2);
     expect(mocks.sendGroupMessage.mock.calls[0]?.[0]).toMatchObject({
       messageId: "msg-1",
+      markdown: false,
     });
     expect(mocks.sendGroupMessage.mock.calls[1]?.[0]).toMatchObject({
       eventId: "evt-1",
+      markdown: false,
     });
   });
 
@@ -87,6 +110,7 @@ describe("qqbotOutbound event_id fallback", () => {
 
     expect(result.channel).toBe("qqbot");
     expect(result.error).toContain("HTTP 400");
+    expect(result.error).toContain("msg_id expired");
     expect(mocks.sendGroupMessage).toHaveBeenCalledTimes(1);
   });
 

@@ -32,7 +32,15 @@
       "replyFinalOnly": { "type": "boolean" },
       "longTaskNoticeDelayMs": { "type": "integer", "minimum": 0 },
       "maxFileSizeMB": { "type": "number", "exclusiveMinimum": 0 },
-      "mediaTimeoutMs": { "type": "integer", "minimum": 1 }
+      "mediaTimeoutMs": { "type": "integer", "minimum": 1 },
+      "inboundMedia": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dir": { "type": "string" },
+          "keepDays": { "type": "number", "minimum": 0 }
+        }
+      }
     }
   },
   "uiHints": {

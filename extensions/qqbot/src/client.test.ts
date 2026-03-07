@@ -16,7 +16,15 @@ vi.mock("@openclaw-china/shared", async () => {
   };
 });
 
-import { MediaFileType, clearTokenCache, getAccessToken, uploadC2CMedia } from "./client.js";
+import {
+  MediaFileType,
+  clearTokenCache,
+  getAccessToken,
+  sendChannelMessage,
+  sendGroupMessage,
+  uploadC2CMedia,
+  uploadGroupMedia,
+} from "./client.js";
 
 describe("getAccessToken", () => {
   beforeEach(() => {
@@ -45,7 +53,7 @@ describe("getAccessToken", () => {
     expect(mocks.httpPost).not.toHaveBeenCalled();
   });
 
-  it("includes file_name for FILE uploads", async () => {
+  it("includes file_name and srv_send_msg for FILE uploads", async () => {
     mocks.httpPost.mockResolvedValue({
       file_uuid: "file-1",
       file_info: "info-1",
@@ -64,6 +72,7 @@ describe("getAccessToken", () => {
       "https://api.sgroup.qq.com/v2/users/user-1/files",
       {
         file_type: 4,
+        srv_send_msg: false,
         file_data: "base64-data",
         file_name: "report.pdf",
       },
@@ -73,6 +82,86 @@ describe("getAccessToken", () => {
           Authorization: "QQBot token-1",
         },
       }
+    );
+  });
+
+  it("sanitizes group file_name and includes srv_send_msg for FILE uploads", async () => {
+    mocks.httpPost.mockResolvedValue({
+      file_uuid: "file-2",
+      file_info: "info-2",
+      ttl: 3600,
+    });
+
+    await uploadGroupMedia({
+      accessToken: "token-2",
+      groupOpenid: "GroupABC123XYZ",
+      fileType: MediaFileType.FILE,
+      fileData: "group-base64-data",
+      fileName: 'report<>:"/\\|?*.pdf',
+    });
+
+    expect(mocks.httpPost).toHaveBeenCalledWith(
+      "https://api.sgroup.qq.com/v2/groups/GroupABC123XYZ/files",
+      {
+        file_type: 4,
+        srv_send_msg: false,
+        file_data: "group-base64-data",
+        file_name: "report_________.pdf",
+      },
+      {
+        timeout: 30000,
+        headers: {
+          Authorization: "QQBot token-2",
+        },
+      }
+    );
+  });
+
+  it("preserves group_openid casing for group message sends", async () => {
+    mocks.httpPost.mockResolvedValue({
+      id: "msg-1",
+      timestamp: 1,
+    });
+
+    await sendGroupMessage({
+      accessToken: "token-1",
+      groupOpenid: "GroupABC123XYZ",
+      content: "hello",
+      messageId: "msg-raw-1",
+      markdown: false,
+    });
+
+    expect(mocks.httpPost).toHaveBeenCalledWith(
+      "https://api.sgroup.qq.com/v2/groups/GroupABC123XYZ/messages",
+      expect.objectContaining({
+        content: "hello",
+        msg_id: "msg-raw-1",
+        msg_type: 0,
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it("preserves channel_id casing for channel message sends", async () => {
+    mocks.httpPost.mockResolvedValue({
+      id: "msg-2",
+      timestamp: 2,
+    });
+
+    await sendChannelMessage({
+      accessToken: "token-1",
+      channelId: "ChannelABC123XYZ",
+      content: "hello",
+      messageId: "msg-raw-2",
+    });
+
+    expect(mocks.httpPost).toHaveBeenCalledWith(
+      "https://api.sgroup.qq.com/channels/ChannelABC123XYZ/messages",
+      expect.objectContaining({
+        content: "hello",
+        msg_id: "msg-raw-2",
+      }),
+      expect.any(Object)
     );
   });
 });

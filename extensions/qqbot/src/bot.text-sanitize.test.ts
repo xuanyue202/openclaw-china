@@ -18,6 +18,11 @@ describe("sanitizeQQBotOutboundText", () => {
   it("suppresses NO_REPLY sentinel", () => {
     expect(sanitizeQQBotOutboundText(" NO_REPLY ")).toBe("");
   });
+
+  it("strips local file placeholders from qq outbound text", () => {
+    const input = "文件在这里：\n[文件: converted-image.pdf]\n\n你继续说。";
+    expect(sanitizeQQBotOutboundText(input)).toBe("文件在这里：\n\n你继续说。");
+  });
 });
 
 describe("shouldSuppressQQBotTextWhenMediaPresent", () => {

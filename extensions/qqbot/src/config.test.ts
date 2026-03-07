@@ -1,5 +1,13 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { QQBotConfigSchema, resolveQQBotASRCredentials, resolveQQBotCredentials } from "./config.js";
+import {
+  QQBotConfigSchema,
+  resolveInboundMediaDir,
+  resolveInboundMediaKeepDays,
+  resolveQQBotASRCredentials,
+  resolveQQBotCredentials,
+} from "./config.js";
 
 describe("QQBotConfigSchema", () => {
   it("applies media defaults", () => {
@@ -8,12 +16,26 @@ describe("QQBotConfigSchema", () => {
     expect(cfg.mediaTimeoutMs).toBe(30000);
     expect(cfg.markdownSupport).toBe(true);
     expect(cfg.longTaskNoticeDelayMs).toBe(30000);
+    expect(resolveInboundMediaDir(cfg)).toBe(join(homedir(), ".openclaw", "media", "qqbot", "inbound"));
+    expect(resolveInboundMediaKeepDays(cfg)).toBe(7);
   });
 
   it("rejects invalid media constraints", () => {
     expect(() => QQBotConfigSchema.parse({ maxFileSizeMB: 0 })).toThrow();
     expect(() => QQBotConfigSchema.parse({ mediaTimeoutMs: 0 })).toThrow();
     expect(() => QQBotConfigSchema.parse({ longTaskNoticeDelayMs: -1 })).toThrow();
+  });
+
+  it("resolves custom inbound media settings", () => {
+    const cfg = QQBotConfigSchema.parse({
+      inboundMedia: {
+        dir: "C:\\custom\\qqbot-media",
+        keepDays: 3,
+      },
+    });
+
+    expect(resolveInboundMediaDir(cfg)).toBe("C:\\custom\\qqbot-media");
+    expect(resolveInboundMediaKeepDays(cfg)).toBe(3);
   });
 
   it("coerces numeric appId values to strings", () => {

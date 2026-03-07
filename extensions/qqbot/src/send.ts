@@ -11,6 +11,7 @@ import {
   MediaFileType,
 } from "./client.js";
 import type { QQBotAccountConfig } from "./types.js";
+import { resolveQQBotCredentials } from "./config.js";
 import {
   detectMediaType,
   FileSizeLimitError,
@@ -74,6 +75,7 @@ async function uploadQQBotFile(params: {
           accessToken,
           groupOpenid: target.id,
           fileType,
+          srvSendMsg: false,
           ...(fileName ? { fileName } : {}),
           ...(url ? { url } : { fileData }),
         })
@@ -81,6 +83,7 @@ async function uploadQQBotFile(params: {
           accessToken,
           openid: target.id,
           fileType,
+          srvSendMsg: false,
           ...(fileName ? { fileName } : {}),
           ...(url ? { url } : { fileData }),
         });
@@ -140,7 +143,8 @@ async function convertAudioToSilk(audioPath: string): Promise<Uint8Array> {
 
 export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: string; timestamp: number | string }> {
   const { cfg, target, mediaUrl, text, messageId, eventId } = params;
-  if (!cfg.appId || !cfg.clientSecret) {
+  const credentials = resolveQQBotCredentials(cfg);
+  if (!credentials) {
     throw new Error("QQBot not configured (missing appId/clientSecret)");
   }
 
@@ -153,7 +157,7 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
   const maxSizeBytes = Math.floor(maxFileSizeMB * 1024 * 1024);
   const messageText = text?.trim() ? text.trim() : undefined;
 
-  const accessToken = await getAccessToken(cfg.appId, cfg.clientSecret);
+  const accessToken = await getAccessToken(credentials.appId, credentials.clientSecret);
   let fileInfo: string;
   try {
     if (sourceIsHttp) {

@@ -8,16 +8,22 @@ import {
   cleanupFileSafe,
   createLogger,
   downloadToTempFile,
+  type ExtractedMedia,
+  finalizeInboundMediaFile,
   fetchMediaFromUrl,
   type Logger,
   appendCronHiddenPrompt,
   ASRError,
   extractMediaFromText,
   isImagePath,
+  pruneInboundMediaDir,
   transcribeTencentFlash,
 } from "@openclaw-china/shared";
 import {
   resolveQQBotASRCredentials,
+  resolveInboundMediaDir,
+  resolveInboundMediaKeepDays,
+  resolveInboundMediaTempDir,
   mergeQQBotAccountConfig,
   DEFAULT_ACCOUNT_ID,
   type QQBotAccountConfig,
@@ -123,6 +129,7 @@ const VOICE_EXTENSIONS = [".silk", ".amr", ".mp3", ".wav", ".ogg", ".m4a", ".aac
 const VOICE_ASR_ERROR_MAX_LENGTH = 500;
 export const LONG_TASK_NOTICE_TEXT = "任务处理时间较长，请稍等，我还在继续处理。";
 export const DEFAULT_LONG_TASK_NOTICE_DELAY_MS = 30000;
+const QQ_GROUP_NO_REPLY_FALLBACK_TEXT = "我在。你可以直接说具体一点。";
 
 type LongTaskNoticeController = {
   markReplyDelivered: () => void;
@@ -249,6 +256,8 @@ async function resolveInboundAttachmentsForAgent(params: {
   const maxFileSizeMB = qqCfg.maxFileSizeMB ?? 100;
   const maxSize = Math.floor(maxFileSizeMB * 1024 * 1024);
   const asrCredentials = resolveQQBotASRCredentials(qqCfg);
+  const inboundMediaDir = resolveInboundMediaDir(qqCfg);
+  const inboundMediaTempDir = resolveInboundMediaTempDir();
 
   const resolved: ResolvedInboundAttachment[] = [];
   let hasVoiceAttachment = false;
@@ -264,10 +273,18 @@ async function resolveInboundAttachmentsForAgent(params: {
           maxSize,
           sourceFileName: att.filename,
           tempPrefix: "qqbot-inbound",
+          tempDir: inboundMediaTempDir,
         });
-        next.localImagePath = downloaded.path;
-        logger.info(`inbound image cached: ${downloaded.path}`);
-        scheduleTempCleanup(downloaded.path);
+        const finalPath = await finalizeInboundMediaFile({
+          filePath: downloaded.path,
+          tempDir: inboundMediaTempDir,
+          inboundDir: inboundMediaDir,
+        });
+        next.localImagePath = finalPath;
+        logger.info(`inbound image cached: ${finalPath}`);
+        if (finalPath === downloaded.path) {
+          scheduleTempCleanup(downloaded.path);
+        }
       } catch (err) {
         logger.warn(`failed to download inbound attachment: ${String(err)}`);
       }
@@ -508,18 +525,20 @@ function resolveInbound(eventType: string, data: unknown, fallbackEventId?: stri
 
 function resolveChatTarget(event: QQInboundMessage): { to: string; peerId: string; peerKind: "group" | "dm" } {
   if (event.type === "group") {
-    const group = (event.groupOpenid ?? "").toLowerCase();
+    const group = event.groupOpenid ?? "";
+    const normalizedGroup = group.toLowerCase();
     return {
       to: `group:${group}`,
-      peerId: `group:${group}`,
+      peerId: `group:${normalizedGroup}`,
       peerKind: "group",
     };
   }
   if (event.type === "channel") {
-    const channel = (event.channelId ?? "").toLowerCase();
+    const channel = event.channelId ?? "";
+    const normalizedChannel = channel.toLowerCase();
     return {
       to: `channel:${channel}`,
-      peerId: `channel:${channel}`,
+      peerId: `channel:${normalizedChannel}`,
       peerKind: "group",
     };
   }
@@ -563,8 +582,9 @@ function extractLocalMediaFromText(params: {
   });
 
   const mediaUrls = result.all
-    .filter((m) => m.isLocal && m.localPath)
-    .map((m) => m.localPath as string);
+    .filter((m): m is ExtractedMedia & { localPath: string } => m.isLocal && typeof m.localPath === "string")
+    .filter((m) => m.type !== "file")
+    .map((m) => m.localPath);
 
   return { text: result.text, mediaUrls };
 }
@@ -598,13 +618,17 @@ function extractMediaLinesFromText(params: {
   return { text: result.text, mediaUrls };
 }
 
-function buildMediaFallbackText(mediaUrl: string): string {
+function buildMediaFallbackText(mediaUrl: string): string | undefined {
+  if (!/^https?:\/\//i.test(mediaUrl)) {
+    return undefined;
+  }
   return `📎 ${mediaUrl}`;
 }
 
 const THINK_BLOCK_RE = /<think\b[^>]*>[\s\S]*?<\/think>/gi;
 const FINAL_BLOCK_RE = /<final\b[^>]*>([\s\S]*?)<\/final>/gi;
 const RAW_THINK_OR_FINAL_TAG_RE = /<\/?(?:think|final)\b[^>]*>/gi;
+const FILE_PLACEHOLDER_RE = /\[文件:\s*[^\]\n]+\]/g;
 const DIRECTIVE_TAG_RE =
   /\[\[\s*(?:reply_to_current|reply_to\s*:[^\]]+|audio_as_voice|tts(?::text)?|\/tts(?::text)?)\s*\]\]/gi;
 const VOICE_EMOTION_TAG_RE =
@@ -629,6 +653,7 @@ export function sanitizeQQBotOutboundText(rawText: string): string {
 
   next = next.replace(THINK_BLOCK_RE, "");
   next = next.replace(RAW_THINK_OR_FINAL_TAG_RE, "");
+  next = next.replace(FILE_PLACEHOLDER_RE, " ");
   next = next.replace(DIRECTIVE_TAG_RE, " ");
   next = next.replace(VOICE_EMOTION_TAG_RE, " ");
   next = next.replace(/[ \t]+\n/g, "\n");
@@ -647,6 +672,31 @@ export function shouldSuppressQQBotTextWhenMediaPresent(rawText: string, sanitiz
   if (/<(?:think|final)\b/i.test(raw)) return true;
   if (!sanitizedText) return true;
   return !/[A-Za-z0-9\u4e00-\u9fff]/.test(sanitizedText);
+}
+
+export function resolveQQBotNoReplyFallback(params: {
+  inbound: Pick<QQInboundMessage, "type" | "mentionedBot" | "content" | "attachments">;
+  replyDelivered: boolean;
+}): string | undefined {
+  const { inbound, replyDelivered } = params;
+  if (replyDelivered) return undefined;
+  if (!inbound.mentionedBot) return undefined;
+  if (inbound.type !== "group" && inbound.type !== "channel") return undefined;
+
+  const hasVisibleInput = inbound.content.trim().length > 0 || (inbound.attachments?.length ?? 0) > 0;
+  if (!hasVisibleInput) return undefined;
+
+  return QQ_GROUP_NO_REPLY_FALLBACK_TEXT;
+}
+
+export function isQQBotGroupMessageInterfaceBlocked(errorMessage?: string): boolean {
+  const text = (errorMessage ?? "").toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes("304103") ||
+    text.includes("群内消息接口被临时封禁") ||
+    text.includes("机器人存在安全风险")
+  );
 }
 
 export function evaluateReplyFinalOnlyDelivery(params: {
@@ -673,9 +723,10 @@ export async function sendQQBotMediaWithFallback(params: {
   replyEventId?: string;
   logger: Logger;
   onDelivered?: () => void;
+  onError?: (error: string) => void;
   outbound?: Pick<typeof qqbotOutbound, "sendMedia" | "sendText">;
 }): Promise<void> {
-  const { qqCfg, to, mediaQueue, replyToId, replyEventId, logger, onDelivered } = params;
+  const { qqCfg, to, mediaQueue, replyToId, replyEventId, logger, onDelivered, onError } = params;
   const outbound = params.outbound ?? qqbotOutbound;
   for (const mediaUrl of mediaQueue) {
     const result = await outbound.sendMedia({
@@ -687,7 +738,11 @@ export async function sendQQBotMediaWithFallback(params: {
     });
     if (result.error) {
       logger.error(`sendMedia failed: ${result.error}`);
+      onError?.(result.error);
       const fallback = buildMediaFallbackText(mediaUrl);
+      if (!fallback) {
+        continue;
+      }
       const fallbackResult = await outbound.sendText({
         cfg: { channels: { qqbot: qqCfg } },
         to,
@@ -697,6 +752,7 @@ export async function sendQQBotMediaWithFallback(params: {
       });
       if (fallbackResult.error) {
         logger.error(`sendText fallback failed: ${fallbackResult.error}`);
+        onError?.(fallbackResult.error);
       } else {
         onDelivered?.();
       }
@@ -790,10 +846,25 @@ async function dispatchToAgent(params: {
     return;
   }
 
+  let replyDelivered = false;
+  let groupMessageInterfaceBlocked = false;
+  const markReplyDelivered = () => {
+    replyDelivered = true;
+    longTaskNotice.markReplyDelivered();
+  };
+  const markGroupMessageInterfaceBlocked = (error?: string) => {
+    if (!isQQBotGroupMessageInterfaceBlocked(error)) return;
+    if (!groupMessageInterfaceBlocked) {
+      logger.warn("QQ group message interface is temporarily blocked by platform; suppressing extra sends");
+    }
+    groupMessageInterfaceBlocked = true;
+  };
+
   const longTaskNotice = startLongTaskNoticeTimer({
     delayMs: qqCfg.longTaskNoticeDelayMs ?? DEFAULT_LONG_TASK_NOTICE_DELAY_MS,
     logger,
     sendNotice: async () => {
+      if (groupMessageInterfaceBlocked) return;
       const result = await qqbotOutbound.sendText({
         cfg: { channels: { qqbot: qqCfg } },
         to: target.to,
@@ -803,14 +874,20 @@ async function dispatchToAgent(params: {
       });
       if (result.error) {
         logger.warn(`send long-task notice failed: ${result.error}`);
+        markGroupMessageInterfaceBlocked(result.error);
+      } else {
+        replyDelivered = true;
       }
     },
   });
+  const inboundMediaDir = resolveInboundMediaDir(qqCfg);
+  const inboundMediaKeepDays = resolveInboundMediaKeepDays(qqCfg);
 
   try {
     const sessionApi = runtime.channel?.session;
+    const sessionConfig = (cfg as { session?: { store?: unknown } } | undefined)?.session;
     const storePath = sessionApi?.resolveStorePath?.(
-      (cfg as Record<string, unknown>)?.session?.store,
+      sessionConfig?.store,
       { agentId: route.agentId }
     );
 
@@ -838,6 +915,9 @@ async function dispatchToAgent(params: {
       });
       if (fallback.error) {
         logger.error(`sendText ASR fallback failed: ${fallback.error}`);
+        markGroupMessageInterfaceBlocked(fallback.error);
+      } else {
+        replyDelivered = true;
       }
       return;
     }
@@ -1030,8 +1110,9 @@ async function dispatchToAgent(params: {
           });
           if (result.error) {
             logger.error(`sendText failed: ${result.error}`);
+            markGroupMessageInterfaceBlocked(result.error);
           } else {
-            longTaskNotice.markReplyDelivered();
+            markReplyDelivered();
           }
         }
       }
@@ -1044,7 +1125,10 @@ async function dispatchToAgent(params: {
         replyEventId: inbound.eventId,
         logger,
         onDelivered: () => {
-          longTaskNotice.markReplyDelivered();
+          markReplyDelivered();
+        },
+        onError: (error) => {
+          markGroupMessageInterfaceBlocked(error);
         },
       });
     };
@@ -1068,44 +1152,72 @@ async function dispatchToAgent(params: {
           },
         },
       });
-      return;
-    }
-
-    const dispatcherResult = replyApi.createReplyDispatcherWithTyping
-      ? replyApi.createReplyDispatcherWithTyping({
-          deliver,
-          humanDelay,
-          onError: (err: unknown, info: { kind: string }) => {
-            logger.error(`${info.kind} reply failed: ${String(err)}`);
-          },
-        })
-      : {
-          dispatcher: replyApi.createReplyDispatcher?.({
+    } else {
+      const dispatcherResult = replyApi.createReplyDispatcherWithTyping
+        ? replyApi.createReplyDispatcherWithTyping({
             deliver,
             humanDelay,
             onError: (err: unknown, info: { kind: string }) => {
               logger.error(`${info.kind} reply failed: ${String(err)}`);
             },
-          }),
-          replyOptions: {},
-          markDispatchIdle: () => undefined,
-        };
+          })
+        : {
+            dispatcher: replyApi.createReplyDispatcher?.({
+              deliver,
+              humanDelay,
+              onError: (err: unknown, info: { kind: string }) => {
+                logger.error(`${info.kind} reply failed: ${String(err)}`);
+              },
+            }),
+            replyOptions: {},
+            markDispatchIdle: () => undefined,
+          };
 
-    if (!dispatcherResult.dispatcher || !replyApi.dispatchReplyFromConfig) {
-      logger.warn("dispatcher not available, skipping reply");
-      return;
+      if (!dispatcherResult.dispatcher || !replyApi.dispatchReplyFromConfig) {
+        logger.warn("dispatcher not available, skipping reply");
+        return;
+      }
+
+      await replyApi.dispatchReplyFromConfig({
+        ctx: finalCtx,
+        cfg,
+        dispatcher: dispatcherResult.dispatcher,
+        replyOptions: dispatcherResult.replyOptions,
+      });
+
+      dispatcherResult.markDispatchIdle?.();
     }
 
-    await replyApi.dispatchReplyFromConfig({
-      ctx: finalCtx,
-      cfg,
-      dispatcher: dispatcherResult.dispatcher,
-      replyOptions: dispatcherResult.replyOptions,
+    const noReplyFallback = resolveQQBotNoReplyFallback({
+      inbound,
+      replyDelivered,
     });
-
-    dispatcherResult.markDispatchIdle?.();
+    if (noReplyFallback && !groupMessageInterfaceBlocked) {
+      logger.info("no visible reply generated for group mention; sending fallback text");
+      const fallbackResult = await qqbotOutbound.sendText({
+        cfg: { channels: { qqbot: qqCfg } },
+        to: target.to,
+        text: noReplyFallback,
+        replyToId: inbound.messageId,
+        replyEventId: inbound.eventId,
+      });
+      if (fallbackResult.error) {
+        logger.error(`sendText no-reply fallback failed: ${fallbackResult.error}`);
+        markGroupMessageInterfaceBlocked(fallbackResult.error);
+      } else {
+        markReplyDelivered();
+      }
+    }
   } finally {
     longTaskNotice.dispose();
+    try {
+      await pruneInboundMediaDir({
+        inboundDir: inboundMediaDir,
+        keepDays: inboundMediaKeepDays,
+      });
+    } catch (err) {
+      logger.warn(`failed to prune qqbot inbound media dir: ${String(err)}`);
+    }
   }
 }
 

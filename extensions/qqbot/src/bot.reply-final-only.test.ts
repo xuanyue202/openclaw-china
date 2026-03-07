@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "@openclaw-china/shared";
 import {
   evaluateReplyFinalOnlyDelivery,
+  isQQBotGroupMessageInterfaceBlocked,
+  resolveQQBotNoReplyFallback,
   sanitizeQQBotOutboundText,
   sendQQBotMediaWithFallback,
   startLongTaskNoticeTimer,
@@ -56,7 +58,7 @@ describe("evaluateReplyFinalOnlyDelivery", () => {
 });
 
 describe("sendQQBotMediaWithFallback", () => {
-  it("falls back to text when sendMedia fails", async () => {
+  it("falls back to text when remote media send fails", async () => {
     const sendMedia = vi.fn().mockResolvedValue({ channel: "qqbot", error: "upload failed" });
     const sendText = vi.fn().mockResolvedValue({ channel: "qqbot", messageId: "m1", timestamp: 1 });
     const logger = {
@@ -81,7 +83,7 @@ describe("sendQQBotMediaWithFallback", () => {
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("sendMedia failed"));
   });
 
-  it("marks delivery when media fallback text succeeds", async () => {
+  it("does not echo local paths when local media send fails", async () => {
     const sendMedia = vi.fn().mockResolvedValue({ channel: "qqbot", error: "upload failed" });
     const sendText = vi.fn().mockResolvedValue({ channel: "qqbot", messageId: "m1", timestamp: 1 });
     const onDelivered = vi.fn();
@@ -95,14 +97,73 @@ describe("sendQQBotMediaWithFallback", () => {
     await sendQQBotMediaWithFallback({
       qqCfg: {},
       to: "user:123",
-      mediaQueue: ["https://example.com/a.mp3"],
+      mediaQueue: ["C:\\Users\\Administrator\\.openclaw\\workspace\\converted-image.pdf"],
       replyToId: "reply-1",
       logger,
       onDelivered,
       outbound: { sendMedia, sendText },
     });
 
-    expect(onDelivered).toHaveBeenCalledTimes(1);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(onDelivered).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveQQBotNoReplyFallback", () => {
+  it("returns fallback text for mentioned group messages when nothing was delivered", () => {
+    const fallback = resolveQQBotNoReplyFallback({
+      inbound: {
+        type: "group",
+        mentionedBot: true,
+        content: "1",
+        attachments: undefined,
+      },
+      replyDelivered: false,
+    });
+
+    expect(fallback).toBe("我在。你可以直接说具体一点。");
+  });
+
+  it("does not return fallback once a visible reply was delivered", () => {
+    const fallback = resolveQQBotNoReplyFallback({
+      inbound: {
+        type: "group",
+        mentionedBot: true,
+        content: "1",
+        attachments: undefined,
+      },
+      replyDelivered: true,
+    });
+
+    expect(fallback).toBeUndefined();
+  });
+
+  it("does not return fallback for direct messages", () => {
+    const fallback = resolveQQBotNoReplyFallback({
+      inbound: {
+        type: "direct",
+        mentionedBot: false,
+        content: "1",
+        attachments: undefined,
+      },
+      replyDelivered: false,
+    });
+
+    expect(fallback).toBeUndefined();
+  });
+});
+
+describe("isQQBotGroupMessageInterfaceBlocked", () => {
+  it("detects platform temporary ban errors", () => {
+    expect(
+      isQQBotGroupMessageInterfaceBlocked(
+        'HTTP 500: Internal Server Error - {"message":"机器人存在安全风险，群内消息接口被临时封禁","code":304103}'
+      )
+    ).toBe(true);
+  });
+
+  it("ignores unrelated errors", () => {
+    expect(isQQBotGroupMessageInterfaceBlocked("HTTP 500: Internal Server Error")).toBe(false);
   });
 });
 

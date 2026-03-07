@@ -29,6 +29,13 @@ function requireTrimmedString(value: unknown, field: string): string {
   return normalized;
 }
 
+function sanitizeUploadFileName(fileName: string): string {
+  const trimmed = fileName.trim();
+  if (!trimmed) return "file";
+  const normalized = trimmed.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_");
+  return normalized || "file";
+}
+
 function nextMsgSeq(sequenceKey?: string): number {
   if (!sequenceKey) return MSG_SEQ_BASE + 1;
   const current = msgSeqMap.get(sequenceKey) ?? 0;
@@ -195,8 +202,7 @@ export async function sendGroupMessage(params: {
     eventId: params.eventId,
     markdown: params.markdown,
   });
-  const groupOpenidLower = params.groupOpenid.toLowerCase();
-  return apiPost(params.accessToken, `/v2/groups/${groupOpenidLower}/messages`, body, {
+  return apiPost(params.accessToken, `/v2/groups/${params.groupOpenid}/messages`, body, {
     timeout: 15000,
   });
 }
@@ -211,8 +217,7 @@ export async function sendChannelMessage(params: {
   if (params.messageId) {
     body.msg_id = params.messageId;
   }
-  const channelIdLower = params.channelId.toLowerCase();
-  return apiPost(params.accessToken, `/channels/${channelIdLower}/messages`, body, {
+  return apiPost(params.accessToken, `/channels/${params.channelId}/messages`, body, {
     timeout: 15000,
   });
 }
@@ -266,9 +271,11 @@ export async function uploadC2CMedia(params: {
   url?: string;
   fileData?: string;
   fileName?: string;
+  srvSendMsg?: boolean;
 }): Promise<UploadMediaResponse> {
   const body: Record<string, unknown> = {
     file_type: params.fileType,
+    srv_send_msg: params.srvSendMsg ?? false,
   };
   if (params.url) {
     body.url = params.url;
@@ -278,7 +285,7 @@ export async function uploadC2CMedia(params: {
     throw new Error("uploadC2CMedia requires url or fileData");
   }
   if (params.fileType === MediaFileType.FILE && params.fileName?.trim()) {
-    body.file_name = params.fileName.trim();
+    body.file_name = sanitizeUploadFileName(params.fileName);
   }
 
   return apiPost(params.accessToken, `/v2/users/${params.openid}/files`, body, {
@@ -293,9 +300,11 @@ export async function uploadGroupMedia(params: {
   url?: string;
   fileData?: string;
   fileName?: string;
+  srvSendMsg?: boolean;
 }): Promise<UploadMediaResponse> {
   const body: Record<string, unknown> = {
     file_type: params.fileType,
+    srv_send_msg: params.srvSendMsg ?? false,
   };
   if (params.url) {
     body.url = params.url;
@@ -305,7 +314,7 @@ export async function uploadGroupMedia(params: {
     throw new Error("uploadGroupMedia requires url or fileData");
   }
   if (params.fileType === MediaFileType.FILE && params.fileName?.trim()) {
-    body.file_name = params.fileName.trim();
+    body.file_name = sanitizeUploadFileName(params.fileName);
   }
 
   return apiPost(params.accessToken, `/v2/groups/${params.groupOpenid}/files`, body, {

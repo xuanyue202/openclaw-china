@@ -66,6 +66,7 @@ describe("sendFileQQBot", () => {
       accessToken: "token",
       groupOpenid: "group-1",
       fileType: 1,
+      srvSendMsg: false,
       url: "https://example.com/media.png",
     });
     expect(mocks.sendGroupMediaMessage).toHaveBeenCalledWith({
@@ -97,6 +98,7 @@ describe("sendFileQQBot", () => {
       accessToken: "token",
       groupOpenid: "group-2",
       fileType: 1,
+      srvSendMsg: false,
       fileData: Buffer.from("hello-image").toString("base64"),
     });
   });
@@ -120,6 +122,7 @@ describe("sendFileQQBot", () => {
       accessToken: "token",
       groupOpenid: "group-3",
       fileType: 4,
+      srvSendMsg: false,
       fileData: Buffer.from("hello-pdf").toString("base64"),
       fileName: "report.pdf",
     });

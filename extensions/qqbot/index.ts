@@ -52,6 +52,14 @@ const plugin = {
       longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
       maxFileSizeMB: { type: "number" },
       mediaTimeoutMs: { type: "number" },
+      inboundMedia: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          dir: { type: "string" },
+          keepDays: { type: "number", minimum: 0 }
+        }
+      },
       accounts: {
         type: "object",
         additionalProperties: {
@@ -83,7 +91,15 @@ const plugin = {
             replyFinalOnly: { type: "boolean" },
             longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
             maxFileSizeMB: { type: "number" },
-            mediaTimeoutMs: { type: "number" }
+            mediaTimeoutMs: { type: "number" },
+            inboundMedia: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                dir: { type: "string" },
+                keepDays: { type: "number", minimum: 0 }
+              }
+            }
           }
         }
       }

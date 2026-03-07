@@ -3,7 +3,12 @@
  */
 
 import { detectMediaType, HttpError, stripTitleFromUrl } from "@openclaw-china/shared";
-import { mergeQQBotAccountConfig, DEFAULT_ACCOUNT_ID, type PluginConfig } from "./config.js";
+import {
+  mergeQQBotAccountConfig,
+  resolveQQBotCredentials,
+  DEFAULT_ACCOUNT_ID,
+  type PluginConfig,
+} from "./config.js";
 import {
   getAccessToken,
   sendC2CInputNotify,
@@ -51,7 +56,7 @@ function shortId(value?: string): string {
 function summarizeError(err: unknown): string {
   if (err instanceof HttpError) {
     const body = err.body?.trim();
-    return body ? `status=${err.status}, body=${body}` : `status=${err.status}, message=${err.message}`;
+    return body ? `${err.message} - ${body}` : err.message;
   }
   return err instanceof Error ? err.message : String(err);
 }
@@ -135,13 +140,15 @@ export const qqbotOutbound = {
   }): Promise<QQBotSendResult> => {
     const { cfg, to, text, replyToId, replyEventId, accountId } = params;
     const qqCfg = mergeQQBotAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
-    if (!qqCfg.appId || !qqCfg.clientSecret) {
+    const credentials = resolveQQBotCredentials(qqCfg);
+    if (!credentials) {
       return { channel: "qqbot", error: "QQBot not configured (missing appId/clientSecret)" };
     }
 
     const target = parseTarget(to);
-    const accessToken = await getAccessToken(qqCfg.appId, qqCfg.clientSecret);
+    const accessToken = await getAccessToken(credentials.appId, credentials.clientSecret);
     const markdown = qqCfg.markdownSupport ?? true;
+    const groupMarkdown = false;
 
     try {
       if (target.kind === "group") {
@@ -152,7 +159,7 @@ export const qqbotOutbound = {
             groupOpenid: target.id,
             content: text,
             messageId: replyToId,
-            markdown,
+            markdown: groupMarkdown,
           });
         } catch (err) {
           if (!replyToId || !replyEventId || !shouldRetryWithEventId(err)) {
@@ -174,7 +181,7 @@ export const qqbotOutbound = {
             groupOpenid: target.id,
             content: text,
             eventId: replyEventId,
-            markdown,
+            markdown: groupMarkdown,
           });
             logEventIdFallback({
               phase: "success",
@@ -267,7 +274,7 @@ export const qqbotOutbound = {
       }
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = summarizeError(err);
       return { channel: "qqbot", error: message };
     }
   },
@@ -291,7 +298,7 @@ export const qqbotOutbound = {
     }
 
     const qqCfg = mergeQQBotAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
-    if (!qqCfg.appId || !qqCfg.clientSecret) {
+    if (!resolveQQBotCredentials(qqCfg)) {
       return { channel: "qqbot", error: "QQBot not configured (missing appId/clientSecret)" };
     }
 
@@ -376,7 +383,7 @@ export const qqbotOutbound = {
       }
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = summarizeError(err);
       return { channel: "qqbot", error: message };
     }
   },
@@ -391,7 +398,8 @@ export const qqbotOutbound = {
   }): Promise<QQBotSendResult> => {
     const { cfg, to, replyToId, replyEventId, inputSecond, accountId } = params;
     const qqCfg = mergeQQBotAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
-    if (!qqCfg.appId || !qqCfg.clientSecret) {
+    const credentials = resolveQQBotCredentials(qqCfg);
+    if (!credentials) {
       return { channel: "qqbot", error: "QQBot not configured (missing appId/clientSecret)" };
     }
 
@@ -401,7 +409,7 @@ export const qqbotOutbound = {
     }
 
     try {
-      const accessToken = await getAccessToken(qqCfg.appId, qqCfg.clientSecret);
+      const accessToken = await getAccessToken(credentials.appId, credentials.clientSecret);
       try {
         await sendC2CInputNotify({
           accessToken,
@@ -456,7 +464,7 @@ export const qqbotOutbound = {
       }
       return { channel: "qqbot" };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = summarizeError(err);
       return { channel: "qqbot", error: message };
     }
   },
