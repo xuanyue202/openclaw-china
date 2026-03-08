@@ -24,7 +24,15 @@ import {
   consumeResponseUrl,
   getAccountPublicBaseUrl,
   registerTempLocalMedia,
+  setAccountPublicBaseUrl,
 } from "./outbound-reply.js";
+import { appendWecomWsActiveStreamChunk, sendWecomWsActiveTemplateCard } from "./ws-reply-context.js";
+import {
+  sendWecomWsProactiveMarkdown,
+  sendWecomWsProactiveTemplateCard,
+  startWecomWsGateway,
+  stopWecomWsGatewayForAccount,
+} from "./ws-gateway.js";
 
 type ParsedDirectTarget = {
   accountId?: string;
@@ -145,6 +153,31 @@ function resolveStreamContext(params: unknown): { sessionKey?: string; runId?: s
     sessionKey: sessionKey || undefined,
     runId: runId || undefined,
   };
+}
+
+async function appendActiveChunk(params: {
+  account: ResolvedWecomAccount;
+  to: string;
+  chunk: string;
+  sessionKey?: string;
+  runId?: string;
+}): Promise<boolean> {
+  if (params.account.mode === "ws") {
+    return appendWecomWsActiveStreamChunk({
+      accountId: params.account.accountId,
+      to: params.to,
+      chunk: params.chunk,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    });
+  }
+  return appendWecomActiveStreamChunk({
+    accountId: params.account.accountId,
+    to: params.to,
+    chunk: params.chunk,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+  });
 }
 
 async function postWecomResponse(responseUrl: string, payload: unknown): Promise<void> {
@@ -297,9 +330,11 @@ export const wecomPlugin = {
     describeAccount: (account: ResolvedWecomAccount) => ({
       accountId: account.accountId,
       name: account.name,
+      mode: account.mode,
       enabled: account.enabled,
       configured: account.configured,
-      webhookPath: account.config.webhookPath ?? "/wecom",
+      webhookPath: account.mode === "webhook" ? account.config.webhookPath ?? "/wecom" : undefined,
+      wsUrl: account.mode === "ws" ? account.wsUrl : undefined,
     }),
 
     resolveAllowFrom: (params: { cfg: PluginConfig; accountId?: string }): string[] => {
@@ -396,8 +431,8 @@ export const wecomPlugin = {
         `[wecom] sendText stream context: runId=${streamContext.runId ?? "-"}, sessionKey=${streamContext.sessionKey ?? "-"}`
       );
       const replyTarget = resolveReplyTargetToken(parsed);
-      const streamAccepted = appendWecomActiveStreamChunk({
-        accountId: account.accountId,
+      const streamAccepted = await appendActiveChunk({
+        account,
         to: replyTarget,
         chunk: params.text,
         sessionKey: streamContext.sessionKey,
@@ -409,6 +444,29 @@ export const wecomPlugin = {
           ok: true,
           messageId: `stream:${Date.now()}`,
         };
+      }
+      if (account.mode === "ws") {
+        try {
+          await sendWecomWsProactiveMarkdown({
+            accountId: account.accountId,
+            to: replyTarget,
+            content: params.text,
+          });
+          return {
+            channel: "wecom",
+            ok: true,
+            messageId: `proactive:${Date.now()}`,
+          };
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.error(`[wecom] sendText failed: ${error.message}`);
+          return {
+            channel: "wecom",
+            ok: false,
+            messageId: "",
+            error,
+          };
+        }
       }
       const error = new Error(
         `No active stream available for ${replyTarget}. WeCom message tool is stream-only in current mode.`
@@ -463,7 +521,9 @@ export const wecomPlugin = {
           const baseUrl = getAccountPublicBaseUrl(account.accountId);
           if (!baseUrl) {
             throw new Error(
-              "No public base URL captured yet for this account. Send one inbound message first, then retry media reply."
+              account.mode === "ws"
+                ? "No public base URL configured for this account. Set channels.wecom.publicBaseUrl (or account-level publicBaseUrl) before sending local media in ws mode."
+                : "No public base URL captured yet for this account. Send one inbound message first, then retry media reply."
             );
           }
           const temp = await registerTempLocalMedia({
@@ -485,8 +545,8 @@ export const wecomPlugin = {
           caption: params.text,
         });
         const replyTarget = resolveReplyTargetToken(parsed);
-        const streamAccepted = appendWecomActiveStreamChunk({
-          accountId: account.accountId,
+        const streamAccepted = await appendActiveChunk({
+          account,
           to: replyTarget,
           chunk: markdown,
           sessionKey: streamContext.sessionKey,
@@ -500,6 +560,18 @@ export const wecomPlugin = {
             channel: "wecom",
             ok: true,
             messageId: `stream:${Date.now()}`,
+          };
+        }
+        if (account.mode === "ws") {
+          await sendWecomWsProactiveMarkdown({
+            accountId: account.accountId,
+            to: replyTarget,
+            content: markdown,
+          });
+          return {
+            channel: "wecom",
+            ok: true,
+            messageId: `proactive:${Date.now()}`,
           };
         }
 
@@ -557,6 +629,43 @@ export const wecomPlugin = {
           messageId: "",
           error,
         };
+      }
+
+      if (account.mode === "ws") {
+        const replyTarget = resolveReplyTargetToken(parsed);
+        try {
+          const updated = await sendWecomWsActiveTemplateCard({
+            accountId: account.accountId,
+            to: replyTarget,
+            templateCard: params.templateCard ?? {},
+          });
+          if (updated) {
+            return {
+              channel: "wecom",
+              ok: true,
+              messageId: `ws-template-card:${Date.now()}`,
+            };
+          }
+          await sendWecomWsProactiveTemplateCard({
+            accountId: account.accountId,
+            to: replyTarget,
+            templateCard: params.templateCard ?? {},
+          });
+          return {
+            channel: "wecom",
+            ok: true,
+            messageId: `proactive-template-card:${Date.now()}`,
+          };
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.error(`[wecom] sendTemplateCard failed: ${error.message}`);
+          return {
+            channel: "wecom",
+            ok: false,
+            messageId: "",
+            error,
+          };
+        }
       }
 
       const responseUrl = consumeResponseUrl({
@@ -629,9 +738,32 @@ export const wecomPlugin = {
       }
 
       const account = resolveWecomAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
+      if (account.publicBaseUrl) {
+        setAccountPublicBaseUrl(account.accountId, account.publicBaseUrl);
+      }
       if (!account.configured) {
-        ctx.log?.info(`[wecom] account ${ctx.accountId} not configured; webhook not registered`);
-        ctx.setStatus?.({ accountId: ctx.accountId, running: false, configured: false });
+        ctx.log?.info(`[wecom] account ${ctx.accountId} not configured for mode=${account.mode}`);
+        ctx.setStatus?.({ accountId: ctx.accountId, mode: account.mode, running: false, configured: false });
+        return;
+      }
+
+      const existing = unregisterHooks.get(ctx.accountId);
+      if (existing) {
+        existing();
+        unregisterHooks.delete(ctx.accountId);
+      }
+
+      if (account.mode === "ws") {
+        await startWecomWsGateway({
+          cfg: (ctx.cfg ?? {}) as PluginConfig,
+          account,
+          runtime: {
+            log: ctx.log?.info ?? console.log,
+            error: ctx.log?.error ?? console.error,
+          },
+          abortSignal: ctx.abortSignal,
+          setStatus: (patch) => ctx.setStatus?.({ accountId: ctx.accountId, ...patch }),
+        });
         return;
       }
 
@@ -647,13 +779,12 @@ export const wecomPlugin = {
         statusSink: (patch) => ctx.setStatus?.({ accountId: ctx.accountId, ...patch }),
       });
 
-      const existing = unregisterHooks.get(ctx.accountId);
-      if (existing) existing();
       unregisterHooks.set(ctx.accountId, unregister);
 
       ctx.log?.info(`[wecom] webhook registered at ${path} for account ${ctx.accountId}`);
       ctx.setStatus?.({
         accountId: ctx.accountId,
+        mode: account.mode,
         running: true,
         configured: true,
         webhookPath: path,
@@ -678,7 +809,7 @@ export const wecomPlugin = {
           unregisterHooks.delete(ctx.accountId);
         }
         unregister();
-        ctx.setStatus?.({ accountId: ctx.accountId, running: false, lastStopAt: Date.now() });
+        ctx.setStatus?.({ accountId: ctx.accountId, mode: account.mode, running: false, lastStopAt: Date.now() });
       }
     },
 
@@ -688,6 +819,7 @@ export const wecomPlugin = {
         unregister();
         unregisterHooks.delete(ctx.accountId);
       }
+      stopWecomWsGatewayForAccount(ctx.accountId);
       ctx.setStatus?.({ accountId: ctx.accountId, running: false, lastStopAt: Date.now() });
     },
   },

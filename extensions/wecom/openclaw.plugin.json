@@ -10,10 +10,18 @@
     "properties": {
       "enabled": { "type": "boolean" },
       "name": { "type": "string" },
+      "mode": { "type": "string", "enum": ["webhook", "ws"] },
       "webhookPath": { "type": "string" },
       "token": { "type": "string" },
       "encodingAESKey": { "type": "string" },
       "receiveId": { "type": "string" },
+      "botId": { "type": "string" },
+      "secret": { "type": "string" },
+      "wsUrl": { "type": "string" },
+      "heartbeatIntervalMs": { "type": "integer", "minimum": 1 },
+      "reconnectInitialDelayMs": { "type": "integer", "minimum": 1 },
+      "reconnectMaxDelayMs": { "type": "integer", "minimum": 1 },
+      "publicBaseUrl": { "type": "string" },
       "welcomeText": { "type": "string" },
       "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist", "disabled"] },
       "allowFrom": { "type": "array", "items": { "type": "string" } },
@@ -29,10 +37,18 @@
           "properties": {
             "name": { "type": "string" },
             "enabled": { "type": "boolean" },
+            "mode": { "type": "string", "enum": ["webhook", "ws"] },
             "webhookPath": { "type": "string" },
             "token": { "type": "string" },
             "encodingAESKey": { "type": "string" },
             "receiveId": { "type": "string" },
+            "botId": { "type": "string" },
+            "secret": { "type": "string" },
+            "wsUrl": { "type": "string" },
+            "heartbeatIntervalMs": { "type": "integer", "minimum": 1 },
+            "reconnectInitialDelayMs": { "type": "integer", "minimum": 1 },
+            "reconnectMaxDelayMs": { "type": "integer", "minimum": 1 },
+            "publicBaseUrl": { "type": "string" },
             "welcomeText": { "type": "string" },
             "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist", "disabled"] },
             "allowFrom": { "type": "array", "items": { "type": "string" } },
@@ -47,6 +63,7 @@
   "uiHints": {
     "token": { "label": "Token", "sensitive": true },
     "encodingAESKey": { "label": "EncodingAESKey", "sensitive": true },
+    "secret": { "label": "Secret", "sensitive": true },
     "webhookPath": { "label": "Webhook Path" }
   }
 }

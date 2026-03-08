@@ -563,21 +563,21 @@ export interface DownloadedMediaFile {
 export async function downloadAndDecryptMedia(params: {
   /** 媒体文件 URL */
   mediaUrl: string;
-  /** Base64 编码的 AES 密钥 */
-  encodingAESKey: string;
+  /** webhook 模式使用 encodingAESKey，长连接模式使用回调内的 aeskey */
+  decryptionKey: string;
   /** 原始文件名（可选，用于确定文件扩展名） */
   fileName?: string;
   /** 日志记录器（可选） */
   log?: Logger;
 }): Promise<DownloadedMediaFile> {
-  const { mediaUrl, encodingAESKey, fileName, log } = params;
+  const { mediaUrl, decryptionKey, fileName, log } = params;
 
   if (!mediaUrl) {
     throw new Error("mediaUrl is required");
   }
 
-  if (!encodingAESKey) {
-    throw new Error("encodingAESKey is required");
+  if (!decryptionKey) {
+    throw new Error("decryptionKey is required");
   }
 
   // 步骤 1: 下载加密的媒体文件
@@ -619,7 +619,7 @@ export async function downloadAndDecryptMedia(params: {
   try {
     decryptedBuffer = decryptWecomMedia({
       encryptedBuffer,
-      encodingAESKey,
+      decryptionKey,
     });
     log?.debug?.(`[wecom] 解密完成: ${decryptedBuffer.length} 字节`);
   } catch (err) {
@@ -715,13 +715,13 @@ export async function processMediaInMessage(params: {
 }): Promise<{ text: string }> {
   const { msg, encodingAESKey, log } = params;
 
-  // 如果没有配置 AES Key，无法解密，返回原始文本
-  if (!encodingAESKey) {
-    log?.debug?.(`[wecom] 未配置 encodingAESKey，跳过媒体解密`);
-    return { text: extractWecomContent(msg) };
-  }
-
   const msgtype = String(msg.msgtype ?? "").toLowerCase();
+  const resolveMediaKey = (value: unknown): string | undefined => {
+    const typed = value && typeof value === "object" ? (value as { aeskey?: string }) : undefined;
+    const aesKey = typed?.aeskey?.trim();
+    if (aesKey) return aesKey;
+    return encodingAESKey?.trim() || undefined;
+  };
 
   // 处理混合消息（mixed）- 优先处理，因为 mixed 可能包含图片
   if (msgtype === "mixed") {
@@ -739,11 +739,13 @@ export async function processMediaInMessage(params: {
           processedParts.push(content);
         } else if (t === "image") {
           const url = String(typed.image?.url ?? "").trim();
+          const decryptionKey = resolveMediaKey(typed.image);
           if (url) {
             try {
+              if (!decryptionKey) throw new Error("missing media decryption key");
               const mediaFile = await downloadAndDecryptMedia({
                 mediaUrl: url,
-                encodingAESKey,
+                decryptionKey,
                 fileName: "image.jpg",
                 log,
               });
@@ -754,13 +756,16 @@ export async function processMediaInMessage(params: {
             }
           }
         } else if (t === "file") {
-          const url = String((typed as { file?: { url?: string; filename?: string } }).file?.url ?? "").trim();
-          const fileName = String((typed as { file?: { url?: string; filename?: string } }).file?.filename ?? "file.bin").trim();
+          const file = (typed as { file?: { url?: string; filename?: string; aeskey?: string } }).file;
+          const url = String(file?.url ?? "").trim();
+          const fileName = String(file?.filename ?? "file.bin").trim();
+          const decryptionKey = resolveMediaKey(file);
           if (url) {
             try {
+              if (!decryptionKey) throw new Error("missing media decryption key");
               const mediaFile = await downloadAndDecryptMedia({
                 mediaUrl: url,
-                encodingAESKey,
+                decryptionKey,
                 fileName,
                 log,
               });
@@ -784,12 +789,15 @@ export async function processMediaInMessage(params: {
 
   // 处理图片消息
   if (msgtype === "image") {
-    const url = String((msg as { image?: { url?: string } }).image?.url ?? "").trim();
+    const image = (msg as { image?: { url?: string; aeskey?: string } }).image;
+    const url = String(image?.url ?? "").trim();
+    const decryptionKey = resolveMediaKey(image);
     if (url) {
       try {
+        if (!decryptionKey) throw new Error("missing media decryption key");
         const mediaFile = await downloadAndDecryptMedia({
           mediaUrl: url,
-          encodingAESKey,
+          decryptionKey,
           fileName: "image.jpg", // 默认文件名
           log,
         });
@@ -805,13 +813,16 @@ export async function processMediaInMessage(params: {
 
   // 处理文件消息
   if (msgtype === "file") {
-    const url = String((msg as { file?: { url?: string } }).file?.url ?? "").trim();
-    const fileName = (msg as { file?: { filename?: string } }).file?.filename;
+    const file = (msg as { file?: { url?: string; filename?: string; aeskey?: string } }).file;
+    const url = String(file?.url ?? "").trim();
+    const fileName = file?.filename;
+    const decryptionKey = resolveMediaKey(file);
     if (url) {
       try {
+        if (!decryptionKey) throw new Error("missing media decryption key");
         const mediaFile = await downloadAndDecryptMedia({
           mediaUrl: url,
-          encodingAESKey,
+          decryptionKey,
           fileName,
           log,
         });
@@ -827,12 +838,15 @@ export async function processMediaInMessage(params: {
 
   // 处理语音消息
   if (msgtype === "voice") {
-    const url = String((msg as { voice?: { url?: string } }).voice?.url ?? "").trim();
+    const voice = (msg as { voice?: { url?: string; aeskey?: string } }).voice;
+    const url = String(voice?.url ?? "").trim();
+    const decryptionKey = resolveMediaKey(voice);
     if (url) {
       try {
+        if (!decryptionKey) throw new Error("missing media decryption key");
         const mediaFile = await downloadAndDecryptMedia({
           mediaUrl: url,
-          encodingAESKey,
+          decryptionKey,
           fileName: "voice.amr", // 默认文件名
           log,
         });

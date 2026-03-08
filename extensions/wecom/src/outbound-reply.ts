@@ -111,6 +111,13 @@ export function rememberAccountPublicBaseUrl(accountId: string, req: IncomingMes
   accountPublicBaseUrl.set(accountId, `${proto}://${host}`);
 }
 
+export function setAccountPublicBaseUrl(accountId: string, baseUrl: string): void {
+  const normalizedAccountId = accountId.trim();
+  const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  if (!normalizedAccountId || !normalizedBaseUrl) return;
+  accountPublicBaseUrl.set(normalizedAccountId, normalizedBaseUrl);
+}
+
 export function getAccountPublicBaseUrl(accountId: string): string | undefined {
   return accountPublicBaseUrl.get(accountId);
 }

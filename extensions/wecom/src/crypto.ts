@@ -11,6 +11,24 @@ function decodeEncodingAESKey(encodingAESKey: string): Buffer {
   return key;
 }
 
+function decodeWecomMediaAESKey(rawKey: string): Buffer {
+  const trimmed = rawKey.trim();
+  if (!trimmed) throw new Error("media AES key missing");
+
+  const utf8Key = Buffer.from(trimmed, "utf8");
+  if (utf8Key.length === 32) {
+    return utf8Key;
+  }
+
+  const withPadding = trimmed.endsWith("=") ? trimmed : `${trimmed}=`;
+  const base64Key = Buffer.from(withPadding, "base64");
+  if (base64Key.length === 32) {
+    return base64Key;
+  }
+
+  throw new Error(`invalid media AES key (expected 32 bytes, got utf8=${utf8Key.length}, base64=${base64Key.length})`);
+}
+
 const WECOM_PKCS7_BLOCK_SIZE = 32;
 
 function pkcs7Pad(buf: Buffer, blockSize: number): Buffer {
@@ -148,17 +166,16 @@ export function encryptWecomPlaintext(params: {
 export function decryptWecomMedia(params: {
   /** 加密的媒体数据 Buffer */
   encryptedBuffer: Buffer;
-  /** Base64 编码的 AES 密钥（43 字符） */
-  encodingAESKey: string;
+  /** webhook 模式使用 encodingAESKey，长连接模式使用每条消息返回的 aeskey */
+  decryptionKey: string;
 }): Buffer {
-  const { encryptedBuffer, encodingAESKey } = params;
+  const { encryptedBuffer, decryptionKey } = params;
 
   if (!encryptedBuffer || encryptedBuffer.length === 0) {
     throw new Error("encryptedBuffer cannot be empty");
   }
 
-  // 解码 AES Key
-  const aesKey = decodeEncodingAESKey(encodingAESKey);
+  const aesKey = decodeWecomMediaAESKey(decryptionKey);
 
   // IV 为 AES Key 的前 16 字节
   const iv = aesKey.subarray(0, 16);

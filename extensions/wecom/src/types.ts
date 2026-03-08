@@ -1,14 +1,23 @@
 export type WecomDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 export type WecomGroupPolicy = "open" | "allowlist" | "disabled";
+export type WecomTransportMode = "webhook" | "ws";
 
 export type WecomAccountConfig = {
   name?: string;
   enabled?: boolean;
+  mode?: WecomTransportMode;
 
   webhookPath?: string;
   token?: string;
   encodingAESKey?: string;
   receiveId?: string;
+  botId?: string;
+  secret?: string;
+  wsUrl?: string;
+  heartbeatIntervalMs?: number;
+  reconnectInitialDelayMs?: number;
+  reconnectMaxDelayMs?: number;
+  publicBaseUrl?: string;
 
   welcomeText?: string;
 
@@ -30,9 +39,17 @@ export type ResolvedWecomAccount = {
   name?: string;
   enabled: boolean;
   configured: boolean;
+  mode: WecomTransportMode;
   token?: string;
   encodingAESKey?: string;
   receiveId: string;
+  botId?: string;
+  secret?: string;
+  wsUrl: string;
+  heartbeatIntervalMs: number;
+  reconnectInitialDelayMs: number;
+  reconnectMaxDelayMs: number;
+  publicBaseUrl?: string;
   config: WecomAccountConfig;
 };
 

@@ -24,23 +24,52 @@
 ![企业注册-3](../../images/wecom_register_company_step3.png)
 ![企业注册-4](../../images/wecom_register_company_step4.png)
 
-### 2. 创建智能机器人并填写回调
+### 2. 创建智能机器人并选择 API 模式
 
 ![创建机器人-1](../../images/wecom_create_bot_step1.png)
 ![创建机器人-2](../../images/wecom_create_bot_step2.png)
-![创建机器人-3](../../images/wecom_create_bot_step3.png)
 
-创建时需要填写回调地址：
+![创建机器人-3](D:\work\code\moltbot-china\doc\images\image-20260308222851633.png)
 
-`http://<你的IP或域名>:18789/wecom`
+![image-20260308223411308](D:\work\code\moltbot-china\doc\images\image-20260308223411308.png)
 
-注意事项：
+企业微信智能机器人现在有两种接入方式：
 
-1. 服务器 `18789` 端口需要可访问。
-2. 先记录平台生成的 `Token` 和 `EncodingAESKey`。
-3. 若“创建”时报回调校验失败，通常是网关未启动或地址不可达。并且需确保先完成下面的安装和启动，再回到后台确认。
+- `webhook`：企业微信回调你的 HTTP 地址，**需要公网可访问的回调地址**。
+- 【**推荐，**企业微信于**3月8日**发布此方式，本插件于**当天**率先支持】`ws`：长连接方式，**不需要固定公网 IP**。
+
+长连接与短连接（Webhook）方式对比
+
+| 特性       | Webhook（短连接）    | WebSocket（长连接）              |
+| ---------- | -------------------- | -------------------------------- |
+| 连接方式   | 每次回调建立新连接   | 复用已建立的长连接               |
+| 延迟       | 较高（每次需建连）   | 低（复用连接）                   |
+| 实时性     | 一般                 | 好                               |
+| 服务端要求 | 需要公网可访问的 URL | 无需固定的公网 IP                |
+| 加解密     | 需要对消息加解密     | 无需加解密                       |
+| 复杂度     | 低                   | 较高（需维护心跳）               |
+| 可靠性     | 高（无状态）         | 需要心跳保活、断线重连           |
+| 适用场景   | 普通回调场景         | 高实时性要求、无固定公网 IP 场景 |
+
+#### 长连接方式（无需公网 IP）
+
+**推荐，**企业微信于**3月8日**发布此方式，本插件于**当天**率先支持
+
+![image-20260308222753962](D:\work\code\moltbot-china\doc\images\image-20260308222753962.png)
+
+
+
+#### 短连接方式（需公网 IP）
 
 ![回调参数位置](../../images/wecom_bot_token_and_aeskey.png)
+
+
+
+### 3. 机器人二维码
+
+![image-20260308223801195](D:\work\code\moltbot-china\doc\images\image-20260308223801195.png)
+
+
 
 ## 二、安装 OpenClaw 与插件
 
@@ -88,12 +117,17 @@ openclaw china setup
 
 ## 三、配置
 
-最小可用配置：
+插件支持 `webhook` 和 `ws` 两种模式。未填写 `mode` 时，默认仍按 `webhook` 处理。
+
+最小可用配置如下。
+
+### 1. `webhook` 模式
 
 > 推荐使用「配置向导」：`openclaw china setup`
 
 ```bash
 openclaw config set channels.wecom.enabled true
+openclaw config set channels.wecom.mode webhook
 openclaw config set channels.wecom.webhookPath /wecom
 openclaw config set channels.wecom.token your-token
 openclaw config set channels.wecom.encodingAESKey your-43-char-encoding-aes-key
@@ -107,6 +141,7 @@ openclaw config set gateway.bind lan
   "channels": {
     "wecom": {
       "enabled": true,
+      "mode": "webhook",
       "webhookPath": "/wecom",
       "token": "your-token",
       "encodingAESKey": "your-43-char-encoding-aes-key"
@@ -115,6 +150,42 @@ openclaw config set gateway.bind lan
 }
 ```
 
+### 2. `ws` 长连接模式
+
+适合没有固定公网 IP、只能主动访问外网的部署环境。
+
+```bash
+openclaw config set channels.wecom.enabled true
+openclaw config set channels.wecom.mode ws
+openclaw config set channels.wecom.botId your-bot-id
+openclaw config set channels.wecom.secret your-secret
+openclaw config set channels.wecom.publicBaseUrl https://bot.example.com
+```
+
+也可以直接编辑配置：
+
+```json
+{
+  "channels": {
+    "wecom": {
+      "enabled": true,
+      "mode": "ws",
+      "botId": "your-bot-id",
+      "secret": "your-secret",
+      "publicBaseUrl": "https://bot.example.com"
+    }
+  }
+}
+```
+
+可选项：
+
+- `wsUrl`: 默认 `wss://openws.work.weixin.qq.com`
+- `heartbeatIntervalMs`: 心跳间隔，默认 30000
+- `reconnectInitialDelayMs`: 首次重连延迟，默认 1000
+- `reconnectMaxDelayMs`: 最大重连延迟，默认 30000
+- `publicBaseUrl`: `ws` 模式发送本地图片/文件时必填，用于暴露 `/wecom-media/...` 临时地址
+
 可选策略项（按需）：
 
 - `dmPolicy`: `open | pairing | allowlist | disabled`
@@ -122,6 +193,15 @@ openclaw config set gateway.bind lan
 - `groupPolicy`: `open | allowlist | disabled`
 - `groupAllowFrom`: 群聊白名单
 - `requireMention`: 群聊是否要求 @ 机器人
+
+### 3. 当前行为说明
+
+- `webhook` 模式保持原有回调行为。
+- `ws` 模式下，收到企业微信长连接回调后，会在同一条 WebSocket 上回消息。
+- `ws` 模式支持当前进程内“已激活会话”的主动发送：
+  用户或群先给机器人发过至少一条消息后，后续可以主动发 `markdown` 或 `template_card`。
+- 如果 `ws` 模式下从未收到该用户/群的消息，主动发送会直接返回明确错误，不会静默丢弃。
+- `ws` 模式发送本地媒体文件时，必须先配置 `publicBaseUrl`，否则无法生成企业微信可访问的临时链接。
 
 ## 四、启动并验证
 

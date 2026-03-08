@@ -1,18 +1,37 @@
 // 企业微信配置 schema
 import { z } from "zod";
 
-import type { ResolvedWecomAccount, WecomAccountConfig, WecomConfig, WecomDmPolicy, WecomGroupPolicy } from "./types.js";
+import type {
+  ResolvedWecomAccount,
+  WecomAccountConfig,
+  WecomConfig,
+  WecomDmPolicy,
+  WecomGroupPolicy,
+  WecomTransportMode,
+} from "./types.js";
 
 /** 默认账户 ID */
 export const DEFAULT_ACCOUNT_ID = "default";
+export const DEFAULT_WECOM_WS_URL = "wss://openws.work.weixin.qq.com";
+export const DEFAULT_WECOM_WS_HEARTBEAT_MS = 30_000;
+export const DEFAULT_WECOM_WS_RECONNECT_INITIAL_MS = 1_000;
+export const DEFAULT_WECOM_WS_RECONNECT_MAX_MS = 30_000;
 
 const WecomAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  mode: z.enum(["webhook", "ws"]).optional(),
   webhookPath: z.string().optional(),
   token: z.string().optional(),
   encodingAESKey: z.string().optional(),
   receiveId: z.string().optional(),
+  botId: z.string().optional(),
+  secret: z.string().optional(),
+  wsUrl: z.string().optional(),
+  heartbeatIntervalMs: z.number().int().positive().optional(),
+  reconnectInitialDelayMs: z.number().int().positive().optional(),
+  reconnectMaxDelayMs: z.number().int().positive().optional(),
+  publicBaseUrl: z.string().optional(),
   welcomeText: z.string().optional(),
   dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional(),
   allowFrom: z.array(z.string()).optional(),
@@ -35,10 +54,18 @@ export const WecomConfigJsonSchema = {
     properties: {
       name: { type: "string" },
       enabled: { type: "boolean" },
+      mode: { type: "string", enum: ["webhook", "ws"] },
       webhookPath: { type: "string" },
       token: { type: "string" },
       encodingAESKey: { type: "string" },
       receiveId: { type: "string" },
+      botId: { type: "string" },
+      secret: { type: "string" },
+      wsUrl: { type: "string" },
+      heartbeatIntervalMs: { type: "integer", minimum: 1 },
+      reconnectInitialDelayMs: { type: "integer", minimum: 1 },
+      reconnectMaxDelayMs: { type: "integer", minimum: 1 },
+      publicBaseUrl: { type: "string" },
       welcomeText: { type: "string" },
       dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist", "disabled"] },
       allowFrom: { type: "array", items: { type: "string" } },
@@ -54,10 +81,18 @@ export const WecomConfigJsonSchema = {
           properties: {
             name: { type: "string" },
             enabled: { type: "boolean" },
+            mode: { type: "string", enum: ["webhook", "ws"] },
             webhookPath: { type: "string" },
             token: { type: "string" },
             encodingAESKey: { type: "string" },
             receiveId: { type: "string" },
+            botId: { type: "string" },
+            secret: { type: "string" },
+            wsUrl: { type: "string" },
+            heartbeatIntervalMs: { type: "integer", minimum: 1 },
+            reconnectInitialDelayMs: { type: "integer", minimum: 1 },
+            reconnectMaxDelayMs: { type: "integer", minimum: 1 },
+            publicBaseUrl: { type: "string" },
             welcomeText: { type: "string" },
             dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist", "disabled"] },
             allowFrom: { type: "array", items: { type: "string" } },
@@ -89,6 +124,10 @@ export function parseWecomConfig(raw: unknown): WecomConfig | undefined {
 export function normalizeAccountId(raw?: string | null): string {
   const trimmed = String(raw ?? "").trim();
   return trimmed || DEFAULT_ACCOUNT_ID;
+}
+
+function normalizeMode(raw?: string | null): WecomTransportMode {
+  return raw === "ws" ? "ws" : "webhook";
 }
 
 function listConfiguredAccountIds(cfg: PluginConfig): string[] {
@@ -129,22 +168,39 @@ export function resolveWecomAccount(params: { cfg: PluginConfig; accountId?: str
   const baseEnabled = params.cfg.channels?.wecom?.enabled !== false;
   const merged = mergeWecomAccountConfig(params.cfg, accountId);
   const enabled = baseEnabled && merged.enabled !== false;
+  const mode = normalizeMode(merged.mode);
 
   const isDefaultAccount = accountId === DEFAULT_ACCOUNT_ID;
   const token = merged.token?.trim() || (isDefaultAccount ? process.env.WECOM_TOKEN?.trim() : undefined) || undefined;
   const encodingAESKey =
     merged.encodingAESKey?.trim() || (isDefaultAccount ? process.env.WECOM_ENCODING_AES_KEY?.trim() : undefined) || undefined;
+  const botId = merged.botId?.trim() || (isDefaultAccount ? process.env.WECOM_BOT_ID?.trim() : undefined) || undefined;
+  const secret = merged.secret?.trim() || (isDefaultAccount ? process.env.WECOM_SECRET?.trim() : undefined) || undefined;
   const receiveId = merged.receiveId?.trim() ?? "";
-  const configured = Boolean(token && encodingAESKey);
+  const wsUrl = merged.wsUrl?.trim() || DEFAULT_WECOM_WS_URL;
+  const publicBaseUrl =
+    merged.publicBaseUrl?.trim() || (isDefaultAccount ? process.env.WECOM_PUBLIC_BASE_URL?.trim() : undefined) || undefined;
+  const heartbeatIntervalMs = merged.heartbeatIntervalMs ?? DEFAULT_WECOM_WS_HEARTBEAT_MS;
+  const reconnectInitialDelayMs = merged.reconnectInitialDelayMs ?? DEFAULT_WECOM_WS_RECONNECT_INITIAL_MS;
+  const reconnectMaxDelayMs = merged.reconnectMaxDelayMs ?? DEFAULT_WECOM_WS_RECONNECT_MAX_MS;
+  const configured = mode === "ws" ? Boolean(botId && secret) : Boolean(token && encodingAESKey);
 
   return {
     accountId,
     name: merged.name?.trim() || undefined,
     enabled,
     configured,
+    mode,
     token,
     encodingAESKey,
     receiveId,
+    botId,
+    secret,
+    wsUrl,
+    heartbeatIntervalMs,
+    reconnectInitialDelayMs,
+    reconnectMaxDelayMs,
+    publicBaseUrl,
     config: merged,
   };
 }

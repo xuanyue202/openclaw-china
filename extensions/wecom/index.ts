@@ -29,10 +29,12 @@ type HttpRouteParams = {
 };
 
 type WecomRouteConfig = {
+  mode?: "webhook" | "ws";
   webhookPath?: string;
   accounts?: Record<
     string,
     {
+      mode?: "webhook" | "ws";
       webhookPath?: string;
     }
   >;
@@ -58,10 +60,13 @@ function normalizeRoutePath(path: string | undefined, fallback: string): string 
 }
 
 function collectWecomRoutePaths(config: WecomRouteConfig | undefined): string[] {
-  const routes = new Set<string>([normalizeRoutePath(config?.webhookPath, "/wecom"), "/wecom-media"]);
+  const routes = new Set<string>(["/wecom-media"]);
+  if ((config?.mode ?? "webhook") !== "ws") {
+    routes.add(normalizeRoutePath(config?.webhookPath, "/wecom"));
+  }
   for (const accountConfig of Object.values(config?.accounts ?? {})) {
+    if ((accountConfig?.mode ?? config?.mode ?? "webhook") === "ws") continue;
     const customPath = accountConfig?.webhookPath?.trim();
-    if (!customPath) continue;
     routes.add(normalizeRoutePath(customPath, "/wecom"));
   }
   return [...routes];
@@ -79,7 +84,7 @@ export type { WecomConfig, ResolvedWecomAccount, WecomInboundMessage } from "./s
 const plugin = {
   id: "wecom",
   name: "WeCom",
-  description: "企业微信智能机器人回调插件",
+  description: "企业微信智能机器人渠道插件（Webhook / 长连接）",
   configSchema: {
     type: "object",
     additionalProperties: false,
