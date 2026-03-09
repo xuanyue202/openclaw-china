@@ -5,6 +5,7 @@ import {
   QQBotConfigSchema,
   resolveInboundMediaDir,
   resolveInboundMediaKeepDays,
+  resolveQQBotAutoSendLocalPathMedia,
   resolveQQBotASRCredentials,
   resolveQQBotCredentials,
 } from "./config.js";
@@ -16,6 +17,7 @@ describe("QQBotConfigSchema", () => {
     expect(cfg.mediaTimeoutMs).toBe(30000);
     expect(cfg.markdownSupport).toBe(true);
     expect(cfg.longTaskNoticeDelayMs).toBe(30000);
+    expect(resolveQQBotAutoSendLocalPathMedia(cfg)).toBe(true);
     expect(resolveInboundMediaDir(cfg)).toBe(join(homedir(), ".openclaw", "media", "qqbot", "inbound"));
     expect(resolveInboundMediaKeepDays(cfg)).toBe(7);
   });
@@ -28,12 +30,14 @@ describe("QQBotConfigSchema", () => {
 
   it("resolves custom inbound media settings", () => {
     const cfg = QQBotConfigSchema.parse({
+      autoSendLocalPathMedia: false,
       inboundMedia: {
         dir: "C:\\custom\\qqbot-media",
         keepDays: 3,
       },
     });
 
+    expect(resolveQQBotAutoSendLocalPathMedia(cfg)).toBe(false);
     expect(resolveInboundMediaDir(cfg)).toBe("C:\\custom\\qqbot-media");
     expect(resolveInboundMediaKeepDays(cfg)).toBe(3);
   });

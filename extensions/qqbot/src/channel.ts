@@ -14,6 +14,7 @@ import {
   resolveQQBotCredentials,
   type PluginConfig,
 } from "./config.js";
+import { qqbotOnboardingAdapter } from "./onboarding.js";
 import { qqbotOutbound } from "./outbound.js";
 import { monitorQQBotProvider, stopQQBotMonitorForAccount } from "./monitor.js";
 import { setQQBotRuntime } from "./runtime.js";
@@ -67,6 +68,7 @@ export const qqbotPlugin = {
     reply: true,
     polls: false,
     blockStreaming: false,
+    activeSend: true,
   },
 
   messaging: {
@@ -155,6 +157,7 @@ export const qqbotPlugin = {
         longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
         maxFileSizeMB: { type: "number" },
         mediaTimeoutMs: { type: "number" },
+        autoSendLocalPathMedia: { type: "boolean" },
         inboundMedia: {
           type: "object",
           additionalProperties: false,
@@ -195,6 +198,7 @@ export const qqbotPlugin = {
               longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
               maxFileSizeMB: { type: "number" },
               mediaTimeoutMs: { type: "number" },
+              autoSendLocalPathMedia: { type: "boolean" },
               inboundMedia: {
                 type: "object",
                 additionalProperties: false,
@@ -211,6 +215,8 @@ export const qqbotPlugin = {
   },
 
   reload: { configPrefixes: ["channels.qqbot"] },
+
+  onboarding: qqbotOnboardingAdapter,
 
   config: {
     listAccountIds: (cfg: PluginConfig): string[] => listQQBotAccountIds(cfg),

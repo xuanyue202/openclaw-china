@@ -33,6 +33,7 @@
       "longTaskNoticeDelayMs": { "type": "integer", "minimum": 0 },
       "maxFileSizeMB": { "type": "number", "exclusiveMinimum": 0 },
       "mediaTimeoutMs": { "type": "integer", "minimum": 1 },
+      "autoSendLocalPathMedia": { "type": "boolean" },
       "inboundMedia": {
         "type": "object",
         "additionalProperties": false,

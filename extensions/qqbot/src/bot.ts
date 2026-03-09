@@ -24,12 +24,14 @@ import {
   resolveInboundMediaDir,
   resolveInboundMediaKeepDays,
   resolveInboundMediaTempDir,
+  resolveQQBotAutoSendLocalPathMedia,
   mergeQQBotAccountConfig,
   DEFAULT_ACCOUNT_ID,
   type QQBotAccountConfig,
   type PluginConfig,
 } from "./config.js";
 import { qqbotOutbound } from "./outbound.js";
+import { upsertKnownQQBotTarget, type KnownQQBotTarget } from "./proactive.js";
 import { getQQBotRuntime } from "./runtime.js";
 import type {
   InboundContext,
@@ -559,6 +561,54 @@ function resolveEnvelopeFrom(event: QQInboundMessage): string {
   return event.senderName?.trim() || event.senderId;
 }
 
+export function resolveKnownQQBotTargetFromInbound(params: {
+  inbound: QQInboundMessage;
+  accountId: string;
+}): KnownQQBotTarget | undefined {
+  const { inbound, accountId } = params;
+
+  if (inbound.type === "direct") {
+    if (!inbound.c2cOpenid?.trim()) {
+      return undefined;
+    }
+    return {
+      accountId,
+      kind: "user",
+      target: `user:${inbound.c2cOpenid}`,
+      displayName: inbound.senderName,
+      sourceChatType: "direct",
+      firstSeenAt: inbound.timestamp,
+      lastSeenAt: inbound.timestamp,
+    };
+  }
+
+  if (inbound.type === "group" && inbound.groupOpenid?.trim()) {
+    return {
+      accountId,
+      kind: "group",
+      target: `group:${inbound.groupOpenid}`,
+      displayName: inbound.senderName,
+      sourceChatType: "group",
+      firstSeenAt: inbound.timestamp,
+      lastSeenAt: inbound.timestamp,
+    };
+  }
+
+  if (inbound.type === "channel" && inbound.channelId?.trim()) {
+    return {
+      accountId,
+      kind: "channel",
+      target: `channel:${inbound.channelId}`,
+      displayName: inbound.senderName,
+      sourceChatType: "channel",
+      firstSeenAt: inbound.timestamp,
+      lastSeenAt: inbound.timestamp,
+    };
+  }
+
+  return undefined;
+}
+
 function extractLocalMediaFromText(params: {
   text: string;
   logger?: Logger;
@@ -616,6 +666,30 @@ function extractMediaLinesFromText(params: {
     .filter((m): m is string => typeof m === "string" && m.trim().length > 0);
 
   return { text: result.text, mediaUrls };
+}
+
+export function extractQQBotReplyMedia(params: {
+  text: string;
+  logger?: Logger;
+  autoSendLocalPathMedia?: boolean;
+}): { text: string; mediaUrls: string[] } {
+  const mediaLineResult = extractMediaLinesFromText({
+    text: params.text,
+    logger: params.logger,
+  });
+  if (!params.autoSendLocalPathMedia) {
+    return mediaLineResult;
+  }
+
+  const localMediaResult = extractLocalMediaFromText({
+    text: mediaLineResult.text,
+    logger: params.logger,
+  });
+
+  return {
+    text: localMediaResult.text,
+    mediaUrls: [...new Set([...mediaLineResult.mediaUrls, ...localMediaResult.mediaUrls])],
+  };
 }
 
 function buildMediaFallbackText(mediaUrl: string): string | undefined {
@@ -1051,15 +1125,12 @@ async function dispatchToAgent(params: {
 
     const deliver = async (payload: unknown, info?: { kind?: string }): Promise<void> => {
       const typed = payload as { text?: string; mediaUrl?: string; mediaUrls?: string[] } | undefined;
-      const mediaLineResult = extractMediaLinesFromText({
+      const extractedTextMedia = extractQQBotReplyMedia({
         text: typed?.text ?? "",
         logger,
+        autoSendLocalPathMedia: resolveQQBotAutoSendLocalPathMedia(qqCfg),
       });
-      const localMediaResult = extractLocalMediaFromText({
-        text: mediaLineResult.text,
-        logger,
-      });
-      const cleanedText = sanitizeQQBotOutboundText(localMediaResult.text);
+      const cleanedText = sanitizeQQBotOutboundText(extractedTextMedia.text);
 
       const payloadMediaUrls = Array.isArray(typed?.mediaUrls)
         ? typed?.mediaUrls
@@ -1078,8 +1149,7 @@ async function dispatchToAgent(params: {
       };
 
       for (const url of payloadMediaUrls) addMedia(url);
-      for (const url of mediaLineResult.mediaUrls) addMedia(url);
-      for (const url of localMediaResult.mediaUrls) addMedia(url);
+      for (const url of extractedTextMedia.mediaUrls) addMedia(url);
 
       const deliveryDecision = evaluateReplyFinalOnlyDelivery({
         replyFinalOnly,
@@ -1091,7 +1161,7 @@ async function dispatchToAgent(params: {
 
       const suppressEchoText =
         mediaQueue.length > 0 &&
-        shouldSuppressQQBotTextWhenMediaPresent(localMediaResult.text, cleanedText);
+        shouldSuppressQQBotTextWhenMediaPresent(extractedTextMedia.text, cleanedText);
       const suppressText = deliveryDecision.suppressText || suppressEchoText;
       const textToSend = suppressText ? "" : cleanedText;
 
@@ -1284,6 +1354,15 @@ export async function handleQQBotDispatch(params: DispatchParams): Promise<void>
 
   if (!shouldHandleMessage(inbound, qqCfg, logger)) {
     return;
+  }
+
+  const knownTarget = resolveKnownQQBotTargetFromInbound({ inbound, accountId });
+  if (knownTarget) {
+    try {
+      upsertKnownQQBotTarget({ target: knownTarget });
+    } catch (err) {
+      logger.warn(`failed to record known qqbot target: ${String(err)}`);
+    }
   }
 
   const attachmentCount = inbound.attachments?.length ?? 0;

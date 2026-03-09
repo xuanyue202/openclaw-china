@@ -15,7 +15,15 @@ export interface MoltbotPluginApi {
 
 export { qqbotPlugin, DEFAULT_ACCOUNT_ID } from "./src/channel.js";
 export { setQQBotRuntime, getQQBotRuntime } from "./src/runtime.js";
+export {
+  listKnownQQBotTargets,
+  getKnownQQBotTarget,
+  removeKnownQQBotTarget,
+  clearKnownQQBotTargets,
+  sendProactiveQQBotMessage,
+} from "./src/proactive.js";
 export type { QQBotConfig, QQBotAccountConfig, ResolvedQQBotAccount, QQBotSendResult } from "./src/types.js";
+export type { KnownQQBotTarget } from "./src/proactive.js";
 
 const plugin = {
   id: "qqbot",
@@ -52,6 +60,7 @@ const plugin = {
       longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
       maxFileSizeMB: { type: "number" },
       mediaTimeoutMs: { type: "number" },
+      autoSendLocalPathMedia: { type: "boolean" },
       inboundMedia: {
         type: "object",
         additionalProperties: false,
@@ -92,6 +101,7 @@ const plugin = {
             longTaskNoticeDelayMs: { type: "integer", minimum: 0 },
             maxFileSizeMB: { type: "number" },
             mediaTimeoutMs: { type: "number" },
+            autoSendLocalPathMedia: { type: "boolean" },
             inboundMedia: {
               type: "object",
               additionalProperties: false,

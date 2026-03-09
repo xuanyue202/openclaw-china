@@ -101,6 +101,10 @@
 - `qqbot` 增强回复可靠性与入站媒体处理，完善回复、发送与客户端链路，并补强相关测试覆盖。
 - 修复 `wecom` 多账号多 Agent 场景下入站路由未透传 `accountId` 的问题，避免 `bindings.match.accountId` 失效后消息错误落到默认 Agent。
 
+### 2026-03-09
+- `qqbot` 新增标准 onboarding 适配器，支持在渠道配置流程中直接完成凭证接入与禁用。
+- `qqbot` 新增已知目标注册表与主动发送 helper，支持复用现有文本/媒体出站链路做单目标主动发送。
+
 
 ### 2026-03-07
 
@@ -354,6 +358,13 @@ cp -a ~/.openclaw/extensions/openclaw-china/extensions/wecom-app/skills/wecom-ap
 openclaw config set channels.qqbot.enabled true
 openclaw config set channels.qqbot.appId your-app-id
 openclaw config set channels.qqbot.clientSecret your-app-secret
+openclaw config set channels.qqbot.autoSendLocalPathMedia false
+```
+
+也可以直接使用一条命令完成接入：
+
+```bash
+openclaw channels add --channel qqbot --token "AppID:ClientSecret"
 ```
 
 （可选）开启语音转文本（腾讯云 Flash ASR）：
@@ -363,6 +374,40 @@ openclaw config set channels.qqbot.asr.enabled true
 openclaw config set channels.qqbot.asr.appId your-tencent-app-id
 openclaw config set channels.qqbot.asr.secretId your-tencent-secret-id
 openclaw config set channels.qqbot.asr.secretKey your-tencent-secret-key
+```
+
+如果你希望回复里保留本地证据路径文本，而不是把 `/root/.openclaw/media/qqbot/inbound/...jpeg` 自动再次作为图片发送，可设置：
+
+```bash
+openclaw config set channels.qqbot.autoSendLocalPathMedia false
+```
+
+主动发送与已知目标：
+
+- 已知目标默认保存到 `~/.openclaw/data/qqbot/known-targets.json`
+- 注册表会记录通过策略校验的 `user:` / `group:` / `channel:` 目标
+- 推荐主动发送时使用 `user:` 与 `group:` 目标
+
+```ts
+import {
+  listKnownQQBotTargets,
+  sendProactiveQQBotMessage,
+} from "@openclaw-china/qqbot";
+
+const targets = listKnownQQBotTargets({ accountId: "default" });
+
+await sendProactiveQQBotMessage({
+  cfg: {
+    channels: {
+      qqbot: {
+        appId: "your-app-id",
+        clientSecret: "your-app-secret",
+      },
+    },
+  },
+  to: targets[0]?.target ?? "user:your-openid",
+  text: "这是一条主动发送的 QQ 消息",
+});
 ```
 
 </details>

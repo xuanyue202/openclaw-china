@@ -105,6 +105,12 @@ pnpm build
 ### 1. 配置 QQ 渠道
 
 > 推荐使用「配置向导」：`openclaw china setup`
+>
+> 如果你已经拿到 `AppID` 和 `ClientSecret`，也可以直接执行：
+>
+> ```bash
+> openclaw channels add --channel qqbot --token "AppID:ClientSecret"
+> ```
 
 ```bash
 openclaw config set channels.qqbot.enabled true
@@ -118,6 +124,7 @@ openclaw config set channels.qqbot.groupPolicy open
 openclaw config set channels.qqbot.requireMention true
 openclaw config set channels.qqbot.textChunkLimit 1500
 openclaw config set channels.qqbot.replyFinalOnly false
+openclaw config set channels.qqbot.autoSendLocalPathMedia true
 openclaw config set channels.qqbot.longTaskNoticeDelayMs 30000
 openclaw config set gateway.http.endpoints.chatCompletions.enabled true
 ```
@@ -136,9 +143,30 @@ openclaw config set gateway.http.endpoints.chatCompletions.enabled true
 | groupAllowFrom | string[] | [] | 群聊白名单 |
 | textChunkLimit | number | 1500 | 文本分块长度 |
 | replyFinalOnly | boolean | false | 是否仅发送最终回复文本（不会阻断媒体工具结果，如 TTS 语音） |
+| autoSendLocalPathMedia | boolean | true | 是否自动把回复文本中的本地图片路径识别为媒体并发送；设为 `false` 时，类似 `/root/.openclaw/media/qqbot/inbound/...jpeg` 的路径会保留在文本里，适合展示“证据 / 文件路径：...” |
 | longTaskNoticeDelayMs | number | 30000 | 首条正式回复超过该时长仍未发送时，自动补发“任务处理时间较长，请稍等，我还在继续处理。”；设为 `0` 可关闭 |
 
-### 3. 多账户配置
+### 3. 常见场景：保留证据路径为文本
+
+如果你希望 Agent 回复里直接显示本地证据路径，而不是把路径再次自动当成图片发送，关闭该开关即可：
+
+```bash
+openclaw config set channels.qqbot.autoSendLocalPathMedia false
+```
+
+关闭后，像下面这样的回复会保留为普通文本：
+
+```text
+证据 / 文件路径：基于你发来的图片 /root/.openclaw/media/qqbot/inbound/2026-03-09/qqbot-inbound-1773071123194-0yuqbk.jpeg
+```
+
+说明：
+
+- `autoSendLocalPathMedia=true`：裸本地图片路径会自动作为媒体发送
+- `autoSendLocalPathMedia=false`：裸本地图片路径保留为文本
+- 显式 `MEDIA:` 指令仍会继续按媒体发送
+
+### 4. 多账户配置
 
 如需配置多个 QQ 机器人，可以使用 `accounts` 对象（键为账户 ID）：
 
@@ -155,7 +183,8 @@ openclaw config set gateway.http.endpoints.chatCompletions.enabled true
           "clientSecret": "secret-1",
           "markdownSupport": true,
           "dmPolicy": "open",
-          "groupPolicy": "open"
+          "groupPolicy": "open",
+          "autoSendLocalPathMedia": false
         },
         "bot2": {
           "name": "备用机器人",
@@ -193,6 +222,7 @@ openclaw config set gateway.http.endpoints.chatCompletions.enabled true
 - 频道内暂不支持媒体发送（会降级为文本 + URL）
 - 不支持平台级流式输出
 - 定时提醒通过 OpenClaw cron 触发（无需额外配置）
+- 插件会自动记录通过策略校验的已知目标，供主动发送脚本复用
 
 ### 3. 启动服务
 
@@ -210,7 +240,78 @@ openclaw daemon start
 
 ---
 
-## 五、可选操作：开启语音转文本
+## 五、主动发送与已知目标
+
+QQBot 现已显式支持主动发送能力（`activeSend: true`），并对外导出已知目标查询/发送 helper。
+
+### 1. 已知目标注册表
+
+- 默认存储文件：`~/.openclaw/data/qqbot/known-targets.json`
+- 仅会写入通过当前策略校验的入站目标，避免把噪音或被拦截来源持久化
+- canonical target 规则：
+  - C2C: `user:<c2cOpenid>`
+  - 群聊: `group:<group_openid>`
+  - 频道消息: `channel:<channel_id>`
+- 主动发送阶段推荐使用 `user:` 和 `group:`；`channel:` 目前主要用于发现和展示
+
+### 2. 查询已知目标
+
+```ts
+import { listKnownQQBotTargets } from "@openclaw-china/qqbot";
+
+const targets = listKnownQQBotTargets({ accountId: "default" });
+console.log(targets);
+```
+
+返回项结构如下：
+
+```ts
+interface KnownQQBotTarget {
+  accountId: string;
+  kind: "user" | "group" | "channel";
+  target: string;
+  displayName?: string;
+  sourceChatType: "direct" | "group" | "channel";
+  firstSeenAt: number;
+  lastSeenAt: number;
+}
+```
+
+### 3. 主动发送消息
+
+```ts
+import { sendProactiveQQBotMessage } from "@openclaw-china/qqbot";
+
+const cfg = {
+  channels: {
+    qqbot: {
+      appId: "your-app-id",
+      clientSecret: "your-app-secret",
+    },
+  },
+};
+
+await sendProactiveQQBotMessage({
+  cfg,
+  to: "user:your-openid",
+  text: "这是一条主动发送的 QQ 消息",
+});
+
+await sendProactiveQQBotMessage({
+  cfg,
+  to: "group:your-group-openid",
+  text: "附件已生成",
+  mediaUrl: "https://example.com/report.png",
+});
+```
+
+> 说明：
+> - helper 直接复用当前 QQ 出站链路，文本与媒体行为和日常回发保持一致
+> - 本阶段不提供“群发全部已知目标”能力，避免误触发批量主动发送
+
+---
+
+## 六、可选操作：开启语音转文本
 
 如果你希望 QQ 语音消息可以自动转文字后再交给 Agent 处理，可按下面步骤配置腾讯云 ASR（录音文件识别极速版）。
 

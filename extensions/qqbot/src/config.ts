@@ -40,6 +40,7 @@ const QQBotAccountSchema = z.object({
   longTaskNoticeDelayMs: z.number().int().min(0).optional().default(30000),
   maxFileSizeMB: z.number().positive().optional().default(100),
   mediaTimeoutMs: z.number().int().positive().optional().default(30000),
+  autoSendLocalPathMedia: z.boolean().optional().default(true),
   inboundMedia: z
     .object({
       dir: z.string().optional(),
@@ -71,6 +72,12 @@ export function resolveInboundMediaKeepDays(config: QQBotAccountConfig | undefin
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
     : DEFAULT_INBOUND_MEDIA_KEEP_DAYS;
+}
+
+export function resolveQQBotAutoSendLocalPathMedia(
+  config: QQBotAccountConfig | undefined
+): boolean {
+  return config?.autoSendLocalPathMedia ?? true;
 }
 
 export function resolveInboundMediaTempDir(): string {
