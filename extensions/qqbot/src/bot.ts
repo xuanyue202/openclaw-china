@@ -710,6 +710,7 @@ const VOICE_EMOTION_TAG_RE =
 const TTS_LIKE_RAW_TEXT_RE =
   /\[\[\s*(?:tts(?::text)?|\/tts(?::text)?|audio_as_voice|reply_to_current|reply_to\s*:)/i;
 const MARKDOWN_TABLE_SEPARATOR_RE = /^\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?)?\|?$/;
+const MARKDOWN_FENCE_RE = /```(?:markdown|md)?\s*\n([\s\S]*?)\n```/gi;
 
 function extractFinalBlocks(text: string): string | undefined {
   const matches = Array.from(text.matchAll(FINAL_BLOCK_RE));
@@ -864,6 +865,25 @@ export function appendQQBotBufferedText(bufferedTexts: string[], nextText: strin
   }
 
   return [...bufferedTexts, normalized];
+}
+
+export function normalizeQQBotRenderedMarkdown(text: string): string {
+  if (!text.trim()) return "";
+
+  let changed = false;
+  const unwrapped = text.replace(MARKDOWN_FENCE_RE, (block, inner: string) => {
+    const normalizedInner = inner.trim();
+    if (!normalizedInner) {
+      return block;
+    }
+    if (!hasQQBotMarkdownTable(normalizedInner)) {
+      return block;
+    }
+    changed = true;
+    return normalizedInner;
+  });
+
+  return changed ? unwrapped.trim() : text.trim();
 }
 
 export async function sendQQBotMediaWithFallback(params: {
@@ -1214,16 +1234,18 @@ async function dispatchToAgent(params: {
       bufferingProactiveTableReply = false;
       bufferedProactiveTableTexts = [];
       if (!combinedText) return;
+      const normalizedCombinedText = normalizeQQBotRenderedMarkdown(combinedText);
 
       const result = await qqbotOutbound.sendText({
         cfg: { channels: { qqbot: qqCfg } },
         to: target.to,
-        text: combinedText,
+        text: normalizedCombinedText,
       });
       if (result.error) {
         logger.error(`send buffered proactive table reply failed: ${result.error}`);
         markGroupMessageInterfaceBlocked(result.error);
       } else {
+        logger.info(`sent buffered proactive QQ markdown reply (len=${normalizedCombinedText.length})`);
         markReplyDelivered();
       }
     };

@@ -5,6 +5,7 @@ import {
   evaluateReplyFinalOnlyDelivery,
   hasQQBotMarkdownTable,
   isQQBotGroupMessageInterfaceBlocked,
+  normalizeQQBotRenderedMarkdown,
   resolveQQBotTextReplyRefs,
   resolveQQBotNoReplyFallback,
   sanitizeQQBotOutboundText,
@@ -187,6 +188,20 @@ describe("appendQQBotBufferedText", () => {
   it("ignores repeated excerpts already covered by buffered text", () => {
     const buffered = appendQQBotBufferedText(["第一段\n\n第二段"], "第二段");
     expect(buffered).toEqual(["第一段\n\n第二段"]);
+  });
+});
+
+describe("normalizeQQBotRenderedMarkdown", () => {
+  it("unwraps markdown fences around tables", () => {
+    const text = "下面是表格：\n\n```markdown\n| col1 | col2 |\n| --- | --- |\n| a | b |\n```";
+    expect(normalizeQQBotRenderedMarkdown(text)).toBe(
+      "下面是表格：\n\n| col1 | col2 |\n| --- | --- |\n| a | b |"
+    );
+  });
+
+  it("keeps non-table fenced code blocks unchanged", () => {
+    const text = "```markdown\n# title\n- item\n```";
+    expect(normalizeQQBotRenderedMarkdown(text)).toBe(text);
   });
 });
 
