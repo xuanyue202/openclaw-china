@@ -188,7 +188,9 @@ describe("QQBot C2C markdown transport", () => {
     ).toBe(true);
     expect(
       logger.info.mock.calls.some(([message]) =>
-        String(message).includes('delivery=c2c-markdown-proactive segment=1/1 chunk=1/1 preview=')
+        String(message).includes(
+          "delivery=c2c-markdown-proactive segment=1/1 chunk=1/1 phase=immediate preview="
+        )
       )
     ).toBe(true);
   });
@@ -241,6 +243,94 @@ describe("QQBot C2C markdown transport", () => {
       replyToId: undefined,
       replyEventId: undefined,
     });
+  });
+
+  it("sends verbose non-final c2c markdown payloads immediately instead of merging them", async () => {
+    installReplyRuntime([
+      { text: "✉️ Message", kind: "tool" },
+      { text: "🧹 Auto-compaction complete (count 8).", kind: "tool" },
+      { text: "我把这张图重新发你一遍。", kind: "final" },
+    ]);
+    const logger = createLogger();
+
+    await handleQQBotDispatch({
+      eventType: "C2C_MESSAGE_CREATE",
+      eventData: {
+        id: "msg-verbose-1",
+        event_id: "evt-verbose-1",
+        content: "hello",
+        timestamp: 1700000000002,
+        author: {
+          user_openid: "u-verbose-1",
+          username: "Alice",
+        },
+      },
+      cfg: {
+        channels: {
+          qqbot: {
+            ...baseCfg.channels.qqbot,
+            c2cMarkdownDeliveryMode: "proactive-all",
+          },
+        },
+      },
+      accountId: "default",
+      logger,
+    });
+
+    expect(outboundMocks.sendText).toHaveBeenCalledTimes(3);
+    expect(outboundMocks.sendText.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "✉️ Message",
+      "🧹 Auto-compaction complete (count 8).",
+      "我把这张图重新发你一遍。",
+    ]);
+    expect(
+      logger.info.mock.calls.some(([message]) =>
+        String(message).includes("delivery=c2c-markdown-proactive") &&
+        String(message).includes("phase=immediate")
+      )
+    ).toBe(true);
+  });
+
+  it("still buffers final c2c markdown reply when replyFinalOnly is enabled", async () => {
+    installReplyRuntime([
+      { text: "中间日志", kind: "tool" },
+      { text: "最终回复", kind: "final" },
+    ]);
+    const logger = createLogger();
+
+    await handleQQBotDispatch({
+      eventType: "C2C_MESSAGE_CREATE",
+      eventData: {
+        id: "msg-final-only-1",
+        event_id: "evt-final-only-1",
+        content: "hello",
+        timestamp: 1700000000003,
+        author: {
+          user_openid: "u-final-only-1",
+          username: "Alice",
+        },
+      },
+      cfg: {
+        channels: {
+          qqbot: {
+            ...baseCfg.channels.qqbot,
+            replyFinalOnly: true,
+            c2cMarkdownDeliveryMode: "proactive-all",
+          },
+        },
+      },
+      accountId: "default",
+      logger,
+    });
+
+    expect(outboundMocks.sendText).toHaveBeenCalledTimes(1);
+    expect(outboundMocks.sendText.mock.calls[0]?.[0]?.text).toBe("最终回复");
+    expect(
+      logger.info.mock.calls.some(([message]) =>
+        String(message).includes("delivery=c2c-markdown-proactive") &&
+        String(message).includes("phase=buffered")
+      )
+    ).toBe(true);
   });
 
   it("keeps raw markdown for c2c transport even when framework table conversion is enabled", async () => {
