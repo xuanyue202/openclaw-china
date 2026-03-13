@@ -100,7 +100,7 @@ pnpm build
 
 ---
 
-## 三、配置与启动
+## 三、配置
 
 ### 1. 配置 QQ 渠道
 
@@ -130,24 +130,56 @@ openclaw config set channels.qqbot.longTaskNoticeDelayMs 30000
 openclaw config set gateway.http.endpoints.chatCompletions.enabled true
 ```
 
+如果你只是想先把 QQ 机器人跑起来，前 3 行基本就够了，后面这些配置大多数场景保持默认即可。
+
 ### 2. 配置项说明
+
+先看最常用的：
+
+- 必填：`enabled`、`appId`、`clientSecret`
+- 通常保持默认即可：`dmPolicy`、`groupPolicy`、`requireMention`、`textChunkLimit`
+- 需要调交互体验时再看：`replyFinalOnly`、`c2cMarkdownDeliveryMode`、`autoSendLocalPathMedia`、`longTaskNoticeDelayMs`
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| enabled | boolean | true | 是否启用 QQ 渠道 |
-| appId | string | - | QQ 机器人 AppID |
-| clientSecret | string | - | QQ 机器人 AppSecret |
-| dmPolicy | string | "open" | 私聊策略：open/pairing/allowlist |
-| groupPolicy | string | "open" | 群聊策略：open/allowlist/disabled |
-| requireMention | boolean | true | 群聊是否必须 @ 机器人 |
-| allowFrom | string[] | [] | 私聊白名单 |
-| groupAllowFrom | string[] | [] | 群聊白名单 |
-| textChunkLimit | number | 1500 | 文本分块长度；C2C Markdown transport 默认尽量保持整条单消息发送，仅在超过长度限制时才分块 |
-| replyFinalOnly | boolean | false | 是否仅发送最终回复文本；开启后会抑制非 final 的纯文本日志/工具输出，但不会阻断媒体工具结果（如 TTS 语音） |
-| c2cMarkdownDeliveryMode | string | "proactive-table-only" | 私聊 C2C Markdown transport 发送策略：`passive` 保持整条回复走被动接口，`proactive-table-only` 在回复中检测到 Markdown 表格时让整条回复改走主动接口，`proactive-all` 让所有私聊 Markdown 回复统一走主动接口 |
-| autoSendLocalPathMedia | boolean | true | 是否自动把回复文本中的本地图片路径识别为媒体并发送；设为 `false` 时，类似 `/root/.openclaw/media/qqbot/inbound/...jpeg` 的路径会保留在文本里，适合展示“证据 / 文件路径：...” |
-| longTaskNoticeDelayMs | number | 30000 | 首条正式回复超过该时长仍未发送时，自动补发“任务处理时间较长，请稍等，我还在继续处理。”；设为 `0` 可关闭 |
+| enabled | boolean | true | 打开或关闭 QQ 渠道 |
+| appId | string | - | QQ 机器人后台里的 `AppID` |
+| clientSecret | string | - | QQ 机器人后台里的 `AppSecret` |
+| dmPolicy | string | "open" | 谁可以直接私聊机器人。`open` 全开放，`pairing` 只允许已配对来源，`allowlist` 只允许白名单 |
+| groupPolicy | string | "open" | 群里谁可以触发机器人。`open` 全开放，`allowlist` 只允许白名单，`disabled` 直接关闭群聊处理 |
+| requireMention | boolean | true | 群里是否必须先 `@` 机器人，它才回复 |
+| allowFrom | string[] | [] | 私聊白名单；只有在 `dmPolicy=allowlist` 时才需要配 |
+| groupAllowFrom | string[] | [] | 群聊白名单；只有在 `groupPolicy=allowlist` 时才需要配 |
+| textChunkLimit | number | 1500 | 单条消息允许的最大文本长度；超出后会自动拆成多条 |
+| replyFinalOnly | boolean | false | 是否只发最终答案。开启后，中间过程日志不发，但图片、语音这类媒体结果仍可正常发送 |
+| c2cMarkdownDeliveryMode | string | "proactive-table-only" | QQ 私聊里 Markdown 用什么方式发。默认只在“带表格”时切到更稳的方式；如果格式老是乱，可以改成 `proactive-all` |
+| autoSendLocalPathMedia | boolean | true | 是否把回复里的本地图片路径自动当成图片发出去。关掉后，路径会原样保留在文本里 |
+| longTaskNoticeDelayMs | number | 30000 | 多久还没正式回复，就先补一句“我还在处理”。设为 `0` 可关闭 |
 
+
+
+### 2.1 引用消息上下文（REFIDX）
+
+在 QQ 私聊里，用户经常会“引用上一条消息再追问一句”。如果平台没有把原文一并带过来，机器人就可能不知道用户在说哪一条。
+
+现在 `qqbot` 会自动把这类被引用的历史消息找回来，再一起交给模型理解。实际效果就是：
+
+- 用户发“这个是什么”“你刚才说的是哪个文件”这类追问时，机器人更容易答对
+- 就算引用的是图片、语音、视频、文件，也会尽量恢复出可读摘要
+- 这项能力默认开启，不需要额外配置开关
+
+默认存储位置：
+
+```text
+~/.openclaw/qqbot/data/ref-index.jsonl
+```
+
+补充说明：
+
+- 入站和出站私聊消息都会自动建立索引
+- 网关重启后会从这个文件继续恢复
+- 当前只支持 QQ 私聊，不处理群聊和频道里的引用
+- 如果本地确实找不到那条旧消息，插件仍然知道“这是一次引用”，但不会把“原始内容不可用”这类占位词直接喂给模型
 
 
 ### 3. 常见场景：保留证据路径为文本
@@ -172,22 +204,22 @@ openclaw config set channels.qqbot.autoSendLocalPathMedia false
 
 ### 3.1 私聊 Markdown 渲染策略
 
-如需通过配置控制 QQ 私聊的 Markdown 发送方式，可以设置：
+如果你发现 QQ 私聊里的标题、表格、引用块显示不稳定，可以调这个配置：
 
 ```bash
 openclaw config set channels.qqbot.c2cMarkdownDeliveryMode proactive-all
 ```
 
-可选值：
+什么时候选哪个值：
 
-- `passive`：整条 C2C Markdown 回复保持被动发送，Markdown 文本和本地富媒体都会保留 `replyToId/replyEventId`
-- `proactive-table-only`：当最终回复里包含 Markdown 表格时，整条 C2C 回复统一改走主动发送
-- `proactive-all`：所有 C2C Markdown 回复统一走主动发送，适合兼容标题、引用、分割线、表格等渲染问题
+- `passive`：尽量按普通回复方式发送。如果你很在意“回复关系”而且格式本身没问题，可以用它
+- `proactive-table-only`：默认值。平时按普通方式发，只有检测到表格时才切到更稳的方式
+- `proactive-all`：所有私聊 Markdown 都走更稳的方式发。如果你经常遇到标题、引用、分割线、表格显示不对，优先试这个
 
 补充说明：
 
-- 在 QQ 私聊启用 Markdown transport（`markdownSupport=true`）后，默认 `replyFinalOnly=false` 时，`/verbose on` 产生的非 final 文本日志会即时发送，一个日志一个消息，不再合并到最终回复中
-- 如果开启 `replyFinalOnly=true`，非 final 纯文本日志仍会被抑制，只保留最终回复；带媒体的工具结果仍会照常发送
+- 默认 `replyFinalOnly=false` 时，`/verbose on` 产生的中间日志会实时一条一条发出
+- 如果你把 `replyFinalOnly=true` 打开，普通中间日志就不发了，只保留最终答案；媒体结果不受影响
 
 ### 3.2 验证 `/verbose on` 实时输出
 
@@ -239,6 +271,7 @@ openclaw config set channels.qqbot.c2cMarkdownDeliveryMode proactive-all
 > - 顶层配置（如 `enabled`、`dmPolicy`）作为默认值，账户内配置会覆盖顶层配置。
 > - `defaultAccount` 指定默认使用的账户 ID，不配置时默认为 `"default"`。
 > - 账户内未指定的字段会继承顶层配置。
+> - 已知目标、引用缓存等本地数据也会按 `accountId` 分开记录，避免多个机器人串数据。
 
 多 agent 分流（bindings）示例：
 ```json
@@ -250,20 +283,12 @@ openclaw config set channels.qqbot.c2cMarkdownDeliveryMode proactive-all
 }
 ```
 > 说明：如果只用默认 `main`，可以不配置 `bindings`；多账号分流到不同 agent 时必须配置。
+
 ---
 
-## 四、能力与限制
+## 四、启动服务
 
-- 当前实现支持文本消息收发与图片发送（C2C/群聊）
-- QQ C2C/群聊富媒体接口暂不支持通用文件（`file_type=4`，例如 PDF），这是官方接口限制而非插件缺陷，会降级为文本提示
-- 频道内暂不支持媒体发送（会降级为文本 + URL）
-- 不支持平台级流式输出；但 QQ 私聊在启用 Markdown transport 且 `replyFinalOnly=false` 时，可以按消息逐条回发非 final verbose/tool 日志
-- 定时提醒通过 OpenClaw cron 触发（无需额外配置）
-- 插件会自动记录通过策略校验的已知目标，供主动发送脚本复用
-
-### 3. 启动服务
-
-调试模式（建议先使用，便于查看日志）：
+调试模式（建议先用这个，方便看日志）：
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -277,19 +302,31 @@ openclaw daemon start
 
 ---
 
-## 五、主动发送与已知目标
+## 五、能力与限制
 
-QQBot 现已显式支持主动发送能力（`activeSend: true`），并对外导出已知目标查询/发送 helper。
+- 支持文本消息、图片、语音和部分文件能力；其中私聊能力比群聊更完整
+- QQ 官方接口对媒体能力本身有限制，尤其是群聊和频道，所以有些文件类型会自动降级成“文本提示 + 链接/路径”
+- 频道消息暂不支持直接发媒体，会退回成文本 + URL
+- QQ 本身不支持真正的平台级流式输出；但在私聊里可以通过多条消息的方式把中间过程持续发出来
+- 私聊支持识别“引用上一条消息”，引用内容默认从 `~/.openclaw/qqbot/data/ref-index.jsonl` 恢复
+- 定时提醒直接走 OpenClaw 自带 cron，不需要额外接别的服务
+- 插件会自动记录通过策略校验的已知用户/群，方便后面主动发送时直接复用
+
+## 六、主动发送与已知目标
+
+`qqbot` 现在支持主动发送，也就是不一定非要等用户先发消息，你也可以按目标主动发给某个用户或群。
 
 ### 1. 已知目标注册表
 
-- 默认存储文件：`~/.openclaw/data/qqbot/known-targets.json`
-- 仅会写入通过当前策略校验的入站目标，避免把噪音或被拦截来源持久化
-- canonical target 规则：
-  - C2C: `user:<c2cOpenid>`
-  - 群聊: `group:<group_openid>`
-  - 频道消息: `channel:<channel_id>`
-- 主动发送阶段推荐使用 `user:` 和 `group:`；`channel:` 目前主要用于发现和展示
+- 默认存储文件：`~/.openclaw/qqbot/data/known-targets.json`
+- 旧版 `~/.openclaw/data/qqbot/known-targets.json` 会在首次访问时自动迁移到新路径
+- 机器人见过、并且通过策略校验的用户或群，会自动记录到这里
+- 多账号场景会按 `accountId` 分开记录
+- 目标格式如下：
+  - 私聊用户：`user:<c2cOpenid>`
+  - QQ 群：`group:<group_openid>`
+  - QQ 频道：`channel:<channel_id>`
+- 真正用于主动发送时，优先使用 `user:` 和 `group:`；`channel:` 目前主要用于展示和发现
 
 ### 2. 查询已知目标
 
@@ -343,12 +380,12 @@ await sendProactiveQQBotMessage({
 ```
 
 > 说明：
-> - helper 直接复用当前 QQ 出站链路，文本与媒体行为和日常回发保持一致
-> - 本阶段不提供“群发全部已知目标”能力，避免误触发批量主动发送
+> - 这里调用的是和日常回复同一套发送链路，所以文本和媒体行为保持一致
+> - 当前不提供“给全部已知目标群发”的能力，避免误操作造成批量发送
 
 ---
 
-## 六、可选操作：开启语音转文本
+## 七、可选操作：开启语音转文本
 
 如果你希望 QQ 语音消息可以自动转文字后再交给 Agent 处理，可按下面步骤配置腾讯云 ASR（录音文件识别极速版）。
 

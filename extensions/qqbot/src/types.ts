@@ -20,6 +20,7 @@ export interface QQBotSendResult {
   channel: "qqbot";
   messageId?: string;
   timestamp?: number | string;
+  refIdx?: string;
   error?: string;
 }
 
@@ -45,6 +46,8 @@ export interface QQInboundMessage {
   groupOpenid?: string;
   channelId?: string;
   guildId?: string;
+  refMsgIdx?: string;
+  msgIdx?: string;
   mentionedBot: boolean;
 }
 
@@ -54,6 +57,10 @@ export interface InboundContext {
   CommandBody: string;
   BodyForAgent?: string;
   BodyForCommands?: string;
+  ReplyToId?: string;
+  ReplyToBody?: string;
+  ReplyToSender?: string;
+  ReplyToIsQuote?: boolean;
   From: string;
   To: string;
   SessionKey: string;

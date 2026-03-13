@@ -2,6 +2,7 @@
  * QQ Bot 出站适配器
  */
 
+import * as path from "node:path";
 import { detectMediaType, HttpError, stripTitleFromUrl } from "@openclaw-china/shared";
 import {
   mergeQQBotAccountConfig,
@@ -18,11 +19,20 @@ import {
   sendGroupMessage,
   sendChannelMessage,
 } from "./client.js";
+import { setRefIndex, type RefAttachmentSummary } from "./ref-index-store.js";
 import { sendFileQQBot } from "./send.js";
 import type { QQBotSendResult } from "./types.js";
 
 
 type TargetKind = "c2c" | "group" | "channel";
+
+type QQBotResponseWithExtInfo = {
+  id: string;
+  timestamp: number | string;
+  ext_info?: {
+    ref_idx?: string;
+  };
+};
 
 function stripPrefix(value: string, prefix: string): string {
   return value.startsWith(prefix) ? value.slice(prefix.length) : value;
@@ -154,6 +164,112 @@ function shouldRetryWithEventId(err: unknown): boolean {
 
 function shouldSendTextAsFollowupForMedia(mediaUrl: string): boolean {
   return detectMediaType(stripTitleFromUrl(mediaUrl)) === "file";
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function resolveResponseRefIdx(response: unknown): string | undefined {
+  if (!response || typeof response !== "object") {
+    return undefined;
+  }
+
+  const direct = (response as { refIdx?: unknown }).refIdx;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  const extInfo = (response as { ext_info?: { ref_idx?: unknown } }).ext_info;
+  if (typeof extInfo?.ref_idx === "string" && extInfo.ref_idx.trim()) {
+    return extInfo.ref_idx.trim();
+  }
+
+  return undefined;
+}
+
+function resolveOutboundAttachmentType(mediaUrl: string): RefAttachmentSummary["type"] {
+  const detected = detectMediaType(stripTitleFromUrl(mediaUrl));
+  if (detected === "image") return "image";
+  if (detected === "video") return "video";
+  if (detected === "audio") return "voice";
+  if (detected === "file") return "file";
+  return "unknown";
+}
+
+function resolveOutboundAttachmentFileName(mediaUrl: string): string | undefined {
+  const source = stripTitleFromUrl(mediaUrl).trim();
+  if (!source) return undefined;
+
+  if (isHttpUrl(source)) {
+    try {
+      const base = path.posix.basename(new URL(source).pathname);
+      return base && base !== "/" ? base : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const base = path.basename(source);
+  return base || undefined;
+}
+
+function buildOutboundAttachmentSummary(params: {
+  mediaUrl: string;
+  text?: string;
+}): RefAttachmentSummary {
+  const source = stripTitleFromUrl(params.mediaUrl).trim();
+  const type = resolveOutboundAttachmentType(source);
+  const filename = resolveOutboundAttachmentFileName(source);
+  const text = params.text?.trim();
+
+  return {
+    type,
+    ...(filename ? { filename } : {}),
+    ...(isHttpUrl(source) ? { url: source } : { localPath: source }),
+    ...(type === "voice" && text
+      ? {
+          transcript: text,
+          transcriptSource: "tts" as const,
+        }
+      : {}),
+  };
+}
+
+function recordOutboundC2CRefIndex(params: {
+  refIdx?: string;
+  accountId?: string;
+  text?: string;
+  mediaUrl?: string;
+}): void {
+  const refIdx = params.refIdx?.trim();
+  if (!refIdx) return;
+
+  const text = params.text?.trim() ?? "";
+  const attachments = params.mediaUrl?.trim()
+    ? [buildOutboundAttachmentSummary({ mediaUrl: params.mediaUrl, text })]
+    : undefined;
+
+  if (!text && !attachments) {
+    return;
+  }
+
+  try {
+    const accountLabel = params.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+    setRefIndex(refIdx, {
+      content: text,
+      senderId: accountLabel,
+      senderName: accountLabel,
+      timestamp: Date.now(),
+      isBot: true,
+      ...(attachments ? { attachments } : {}),
+    });
+    console.info(
+      `[qqbot] cached outbound ref_idx=${refIdx} accountId=${accountLabel} textLen=${text.length} media=${params.mediaUrl?.trim() ? "yes" : "no"}`
+    );
+  } catch (err) {
+    console.warn(`[qqbot] failed to cache outbound ref_idx=${refIdx}: ${String(err)}`);
+  }
 }
 
 function buildPassiveReplyRefs(params: {
@@ -317,10 +433,17 @@ export const qqbotOutbound = {
           content: text,
           markdown,
         });
-        return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+        const refIdx = resolveResponseRefIdx(result);
+        recordOutboundC2CRefIndex({ refIdx, accountId, text });
+        return {
+          channel: "qqbot",
+          messageId: result.id,
+          timestamp: result.timestamp,
+          ...(refIdx ? { refIdx } : {}),
+        };
       }
 
-      let result: { id: string; timestamp: number | string };
+      let result: QQBotResponseWithExtInfo;
       try {
         logQQBotOutboundDispatch({
           action: "text",
@@ -385,7 +508,14 @@ export const qqbotOutbound = {
           throw retryErr;
         }
       }
-      return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+      const refIdx = resolveResponseRefIdx(result);
+      recordOutboundC2CRefIndex({ refIdx, accountId, text });
+      return {
+        channel: "qqbot",
+        messageId: result.id,
+        timestamp: result.timestamp,
+        ...(refIdx ? { refIdx } : {}),
+      };
     } catch (err) {
       const message = summarizeError(err);
       return { channel: "qqbot", error: message };
@@ -424,7 +554,7 @@ export const qqbotOutbound = {
     }
 
     try {
-      let result: { id: string; timestamp: number | string };
+      let result: { id: string; timestamp: number | string; refIdx?: string };
       try {
         logQQBotOutboundDispatch({
           action: "media",
@@ -505,7 +635,21 @@ export const qqbotOutbound = {
           };
         }
       }
-      return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+      const refIdx = target.kind === "c2c" ? resolveResponseRefIdx(result) : undefined;
+      if (target.kind === "c2c") {
+        recordOutboundC2CRefIndex({
+          refIdx,
+          accountId,
+          text: sendTextAsFollowup ? undefined : trimmedText,
+          mediaUrl,
+        });
+      }
+      return {
+        channel: "qqbot",
+        messageId: result.id,
+        timestamp: result.timestamp,
+        ...(refIdx ? { refIdx } : {}),
+      };
     } catch (err) {
       const message = summarizeError(err);
       return { channel: "qqbot", error: message };
@@ -534,8 +678,9 @@ export const qqbotOutbound = {
 
     try {
       const accessToken = await getAccessToken(credentials.appId, credentials.clientSecret);
+      let typingResult: { refIdx?: string } | undefined;
       try {
-        await sendC2CInputNotify({
+        typingResult = await sendC2CInputNotify({
           accessToken,
           openid: target.id,
           messageId: replyToId,
@@ -557,12 +702,12 @@ export const qqbotOutbound = {
           reason: summarizeError(err),
         });
         try {
-        await sendC2CInputNotify({
-          accessToken,
-          openid: target.id,
-          eventId: replyEventId,
-          inputSecond,
-        });
+          typingResult = await sendC2CInputNotify({
+            accessToken,
+            openid: target.id,
+            eventId: replyEventId,
+            inputSecond,
+          });
           logEventIdFallback({
             phase: "success",
             action: "typing",
@@ -586,7 +731,10 @@ export const qqbotOutbound = {
           throw retryErr;
         }
       }
-      return { channel: "qqbot" };
+      return {
+        channel: "qqbot",
+        ...(typingResult?.refIdx ? { refIdx: typingResult.refIdx } : {}),
+      };
     } catch (err) {
       const message = summarizeError(err);
       return { channel: "qqbot", error: message };

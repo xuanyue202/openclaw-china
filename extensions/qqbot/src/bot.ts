@@ -40,6 +40,12 @@ import {
 } from "./markdown-images.js";
 import { qqbotOutbound } from "./outbound.js";
 import { upsertKnownQQBotTarget, type KnownQQBotTarget } from "./proactive.js";
+import {
+  formatRefEntryForAgent,
+  getRefIndex,
+  setRefIndex,
+  type RefAttachmentSummary,
+} from "./ref-index-store.js";
 import { getQQBotRuntime } from "./runtime.js";
 import type {
   InboundContext,
@@ -205,6 +211,41 @@ function parseTextWithAttachments(payload: Record<string, unknown>): {
   };
 }
 
+function parseQQBotRefIndices(payload: Record<string, unknown>): {
+  refMsgIdx?: string;
+  msgIdx?: string;
+} {
+  const scene = payload.message_scene;
+  if (!scene || typeof scene !== "object") {
+    return {};
+  }
+
+  const ext = (scene as { ext?: unknown }).ext;
+  if (!Array.isArray(ext)) {
+    return {};
+  }
+
+  let refMsgIdx: string | undefined;
+  let msgIdx: string | undefined;
+
+  for (const value of ext) {
+    const item = toString(value);
+    if (!item) continue;
+    if (item.startsWith("ref_msg_idx=")) {
+      refMsgIdx = toString(item.slice("ref_msg_idx=".length));
+      continue;
+    }
+    if (item.startsWith("msg_idx=")) {
+      msgIdx = toString(item.slice("msg_idx=".length));
+    }
+  }
+
+  return {
+    ...(refMsgIdx ? { refMsgIdx } : {}),
+    ...(msgIdx ? { msgIdx } : {}),
+  };
+}
+
 function resolveEventId(payload: Record<string, unknown>, fallbackEventId?: string): string | undefined {
   return toString(payload.event_id) ?? toString(payload.eventId) ?? toString(fallbackEventId);
 }
@@ -228,6 +269,7 @@ const VOICE_ASR_ERROR_MAX_LENGTH = 500;
 export const LONG_TASK_NOTICE_TEXT = "任务处理时间较长，请稍等，我还在继续处理。";
 export const DEFAULT_LONG_TASK_NOTICE_DELAY_MS = 30000;
 const QQ_GROUP_NO_REPLY_FALLBACK_TEXT = "我在。你可以直接说具体一点。";
+const QQ_QUOTE_BODY_UNAVAILABLE_TEXT = "原始内容不可用";
 
 type LongTaskNoticeController = {
   markReplyDelivered: () => void;
@@ -481,6 +523,84 @@ function buildInboundContentWithAttachments(params: {
   return parts.join("\n\n");
 }
 
+function resolveRefAttachmentType(attachment: QQInboundAttachment): RefAttachmentSummary["type"] {
+  const contentType = attachment.contentType?.trim().toLowerCase() ?? "";
+  if (contentType.startsWith("image/") || isImageAttachment(attachment)) {
+    return "image";
+  }
+  if (contentType === "voice" || contentType.startsWith("audio/") || isVoiceAttachment(attachment)) {
+    return "voice";
+  }
+  if (contentType.startsWith("video/")) {
+    return "video";
+  }
+
+  const mediaType = detectMediaType(attachment.filename?.trim() || attachment.url);
+  if (mediaType === "image") return "image";
+  if (mediaType === "audio") return "voice";
+  if (mediaType === "video") return "video";
+  if (mediaType === "file") return "file";
+  return "unknown";
+}
+
+function buildInboundRefAttachmentSummaries(
+  attachments: ResolvedInboundAttachment[]
+): RefAttachmentSummary[] | undefined {
+  if (attachments.length === 0) {
+    return undefined;
+  }
+
+  return attachments.map((item) => ({
+    type: resolveRefAttachmentType(item.attachment),
+    ...(item.attachment.filename?.trim() ? { filename: item.attachment.filename.trim() } : {}),
+    ...(item.attachment.contentType?.trim() ? { contentType: item.attachment.contentType.trim() } : {}),
+    ...(item.localImagePath?.trim() ? { localPath: item.localImagePath.trim() } : {}),
+    ...(item.attachment.url?.trim() ? { url: item.attachment.url.trim() } : {}),
+    ...(item.voiceTranscript?.trim()
+      ? {
+          transcript: item.voiceTranscript.trim(),
+          transcriptSource: "asr" as const,
+        }
+      : {}),
+  }));
+}
+
+function buildQuotedAgentBody(params: {
+  baseBody: string;
+  replyToBody: string;
+}): string {
+  const quoteBlock = `[引用消息开始]\n${params.replyToBody}\n[引用消息结束]`;
+  return params.baseBody ? `${quoteBlock}\n\n${params.baseBody}` : quoteBlock;
+}
+
+function resolveAgentBodyBase(ctx: InboundContext): string {
+  if (typeof ctx.BodyForAgent === "string" && ctx.BodyForAgent.trim()) {
+    return ctx.BodyForAgent;
+  }
+  if (typeof ctx.RawBody === "string" && ctx.RawBody.trim()) {
+    return ctx.RawBody;
+  }
+  if (typeof ctx.Body === "string" && ctx.Body.trim()) {
+    return ctx.Body;
+  }
+  if (typeof ctx.CommandBody === "string" && ctx.CommandBody.trim()) {
+    return ctx.CommandBody;
+  }
+  return "";
+}
+
+function uniqueRefIndexKeys(...values: Array<string | undefined>): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const next = value?.trim();
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    keys.push(next);
+  }
+  return keys;
+}
+
 function resolveInboundLogContent(params: {
   content: string;
   attachments?: QQInboundAttachment[];
@@ -508,6 +628,7 @@ function sanitizeInboundLogText(text: string): string {
 function parseC2CMessage(data: unknown, fallbackEventId?: string): QQInboundMessage | null {
   const payload = data as Record<string, unknown>;
   const { text, attachments } = parseTextWithAttachments(payload);
+  const refIndices = parseQQBotRefIndices(payload);
   const id = toString(payload.id);
   const eventId = resolveEventId(payload, fallbackEventId);
   const timestamp = toNumber(payload.timestamp) ?? Date.now();
@@ -525,6 +646,7 @@ function parseC2CMessage(data: unknown, fallbackEventId?: string): QQInboundMess
     messageId: id,
     eventId,
     timestamp,
+    ...refIndices,
     mentionedBot: false,
   };
 }
@@ -1211,6 +1333,7 @@ async function dispatchToAgent(params: {
   const routeSessionKey = resolveQQBotRouteSessionKey(route);
   const target = resolveChatTarget(inbound);
   const outboundAccountId = route.accountId ?? accountId;
+  let typingRefIdx: string | undefined;
   if (inbound.c2cOpenid) {
     const typing = await qqbotOutbound.sendTyping({
       cfg: { channels: { qqbot: qqCfg } },
@@ -1222,6 +1345,8 @@ async function dispatchToAgent(params: {
     });
     if (typing.error) {
       logger.warn(`sendTyping failed: ${typing.error}`);
+    } else {
+      typingRefIdx = typing.refIdx;
     }
   }
 
@@ -1313,6 +1438,43 @@ async function dispatchToAgent(params: {
     if (localImageCount > 0) {
       logger.info(`prepared ${localImageCount} local image attachment(s) for agent`);
     }
+    let replyToId: string | undefined;
+    let replyToBody: string | undefined;
+    let replyToSender: string | undefined;
+    let replyToIsQuote = false;
+
+    if (inbound.c2cOpenid && inbound.refMsgIdx) {
+      replyToId = inbound.refMsgIdx;
+      replyToIsQuote = true;
+      const refEntry = getRefIndex(inbound.refMsgIdx);
+      if (refEntry) {
+        replyToBody = formatRefEntryForAgent(refEntry);
+        replyToSender = refEntry.senderName ?? refEntry.senderId;
+        logger.info(`quote context resolved refMsgIdx=${inbound.refMsgIdx}`);
+      } else {
+        replyToBody = QQ_QUOTE_BODY_UNAVAILABLE_TEXT;
+        logger.warn(`quote context missing refMsgIdx=${inbound.refMsgIdx}`);
+      }
+    }
+
+    const refAttachmentSummaries = buildInboundRefAttachmentSummaries(resolvedAttachments);
+    const currentRefIndexKeys = inbound.c2cOpenid
+      ? uniqueRefIndexKeys(inbound.msgIdx, typingRefIdx)
+      : [];
+    if (currentRefIndexKeys.length > 0) {
+      for (const currentRefIndexKey of currentRefIndexKeys) {
+        setRefIndex(currentRefIndexKey, {
+          content: inbound.content,
+          senderId: inbound.senderId,
+          ...(inbound.senderName ? { senderName: inbound.senderName } : {}),
+          timestamp: inbound.timestamp,
+          ...(refAttachmentSummaries ? { attachments: refAttachmentSummaries } : {}),
+        });
+      }
+      logger.info(
+        `cached inbound ref_idx keys=${currentRefIndexKeys.join(",")} msgIdx=${inbound.msgIdx ?? "-"} typingRefIdx=${typingRefIdx ?? "-"}`
+      );
+    }
     const rawBody = buildInboundContentWithAttachments({
       content: inbound.content,
       attachments: resolvedAttachments,
@@ -1360,21 +1522,28 @@ async function dispatchToAgent(params: {
     const stableTo = ctxOriginatingTo ?? ctxTo ?? target.to;
     finalCtx.To = stableTo;
     finalCtx.OriginatingTo = stableTo;
-
-    let cronBase = "";
-    if (typeof finalCtx.RawBody === "string" && finalCtx.RawBody) {
-      cronBase = finalCtx.RawBody;
-    } else if (typeof finalCtx.Body === "string" && finalCtx.Body) {
-      cronBase = finalCtx.Body;
-    } else if (typeof finalCtx.CommandBody === "string" && finalCtx.CommandBody) {
-      cronBase = finalCtx.CommandBody;
+    if (replyToId) {
+      finalCtx.ReplyToId = replyToId;
+      finalCtx.ReplyToBody = replyToBody;
+      finalCtx.ReplyToSender = replyToSender;
+      finalCtx.ReplyToIsQuote = replyToIsQuote;
     }
 
-    if (cronBase) {
-      const nextCron = appendCronHiddenPrompt(cronBase);
-      if (nextCron !== cronBase) {
-        finalCtx.BodyForAgent = nextCron;
+    const isSlashCommand =
+      typeof finalCtx.CommandBody === "string"
+        ? finalCtx.CommandBody.trim().startsWith("/")
+        : typeof finalCtx.RawBody === "string"
+          ? finalCtx.RawBody.trim().startsWith("/")
+          : false;
+    if (!isSlashCommand) {
+      let agentBody = resolveAgentBodyBase(finalCtx);
+      if (replyToIsQuote && replyToBody && replyToBody !== QQ_QUOTE_BODY_UNAVAILABLE_TEXT) {
+        agentBody = buildQuotedAgentBody({
+          baseBody: agentBody,
+          replyToBody,
+        });
       }
+      finalCtx.BodyForAgent = appendCronHiddenPrompt(agentBody);
     }
 
     if (storePath && sessionApi?.recordInboundSession) {

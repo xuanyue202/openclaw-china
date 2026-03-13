@@ -121,22 +121,27 @@
 <details>
 <summary><strong>点击展开更新日志</strong></summary>
 
+### 2026-03-13
+- `qqbot` 现在能看懂 QQ 私聊里的“引用上一条消息”。用户问“这个是什么”“你刚才说的哪个文件”时，模型会一起参考被引用的那条内容来回答。
+- 引用内容会自动缓存在本地 `~/.openclaw/qqbot/data/ref-index.jsonl`，就算网关重启，之前的引用关系也还能继续识别。
+- 被引用的内容不只支持纯文本，也支持图片、语音、视频、文件这类消息的摘要；如果本地确实找不到旧消息，也不会再把“原始内容不可用”这种占位词喂给模型。
+
 ### 2026-03-12
-- `qqbot` 调整 QQ 私聊 C2C Markdown transport：在开启 `/verbose on` 且 `replyFinalOnly=false` 时，非 final 的工具/日志输出恢复为即时发送，一个日志一条消息，不再合并到最终回复里。
-- `qqbot` 保持 `replyFinalOnly=true` 的既有语义：非 final 纯文本输出继续被抑制，但媒体类工具结果仍可正常投递。
+- `qqbot` 在 QQ 私聊里开启 `/verbose on` 且 `replyFinalOnly=false` 后，执行过程中的工具输出和日志会边跑边发，一条一条实时出现，不会再等到最后一起发。
+- 如果你保持 `replyFinalOnly=true`，行为还是和以前一样：普通过程日志不发，只发最终文本结果；但图片、语音这类媒体结果照样能正常发出。
 
 ### 2026-03-11
-- `qqbot` 调整 C2C Markdown transport：私聊 Markdown 回复现在保留原始 Markdown 文本，公网图片自动补 QQ 图片尺寸语法，本地图片继续走富媒体 API。
-- `qqbot` 新增 `c2cMarkdownDeliveryMode` 的整条回复级主动/被动策略说明；对于“带表格后标题、引用、任务列表等 Markdown 不稳定”的场景，推荐直接使用 `proactive-all`。
-- `qqbot` 修复 C2C Markdown transport 复用表格转换后导致标题、引用、列表等语法被改写的问题，并恢复“带表格时默认整条单消息发送”以避免内容截断。
+- `qqbot` 优化了 QQ 私聊里的 Markdown 回复，标题、引用、列表、图片这些格式更接近原文，不容易被改坏。
+- 文档里补充了 `c2cMarkdownDeliveryMode` 的使用建议。如果你遇到“带表格的回复显示很乱”，直接用 `proactive-all` 会更稳。
+- 现在带表格的内容默认整条一次发出，减少被 QQ 截断、拆坏格式的问题。
 
 ### 2026-03-10
-- 修复 `wecom-app` 在开启 `/verbose on` 后将工具日志合并到单条消息、并在任务结束后才一次性发送的问题；现在会按 chunk 逐段主动发送，提升长任务场景下的实时反馈。
-- 补充 `wecom-app` 配置文档中的 `/verbose on` 验证步骤、常见问题排查与能力说明，便于升级后快速自检。
+- 修复 `wecom-app` 开启 `/verbose on` 后“中间过程一直不发、最后一次性刷屏”的问题。现在长任务执行时会持续回消息，能更早看到进度。
+- 同步补充了 `wecom-app` 的验证步骤和排查说明，升级后更容易自查有没有生效。
 
 ### 2026-03-09
-- `qqbot` 新增标准 onboarding 适配器，支持在渠道配置流程中直接完成凭证接入与禁用。
-- `qqbot` 新增已知目标注册表与主动发送 helper，支持复用现有文本/媒体出站链路做单目标主动发送。
+- `qqbot` 现在可以直接走标准配置流程接入和关闭，不用再自己额外拼一套配置步骤。
+- `qqbot` 新增“已知目标”记录和主动发送能力。机器人见过的用户或群会被记下来，后面可以直接给指定对象主动发文字或媒体。
 
 ### 2026-03-08
 - 主要：** `wecom` 智能机器人新增长连接 `ws` 模式 **，无需 IP 即可配置，并且体验更佳。【全网首发！企微官方3月8日支持长连接模式，本项目当天即支持】
@@ -439,9 +444,17 @@ openclaw config set channels.qqbot.c2cMarkdownDeliveryMode proactive-all
 - 如果同时开启 `replyFinalOnly=true`，非 final 纯文本日志仍会被抑制，只保留最终回复；媒体类工具结果不受影响
 - 如果你发现“不带表格时基本正常，但带表格后标题、引用、任务列表不稳定”，优先使用 `proactive-all`；这通常是 QQ 被动回复接口本身的渲染限制
 
+引用消息上下文（REFIDX）：
+
+- QQ 的引用事件通常只返回 `REFIDX_*` 索引，不直接返回被引用消息全文；`qqbot` 现在会自动从本地索引中恢复引用内容并注入 AI 上下文
+- 入站和出站私聊消息中的 `ref_idx` 会自动建索引，默认落盘到 `~/.openclaw/qqbot/data/ref-index.jsonl`
+- 引用恢复支持文本和媒体摘要（图片 / 语音 / 视频 / 文件）
+- 如果某条历史引用在本地缓存中不存在，插件仍会保留引用关系，但不会把占位文本直接透传给模型
+
 主动发送与已知目标：
 
-- 已知目标默认保存到 `~/.openclaw/data/qqbot/known-targets.json`
+- 已知目标默认保存到 `~/.openclaw/qqbot/data/known-targets.json`
+- 旧版 `~/.openclaw/data/qqbot/known-targets.json` 会在首次访问时自动迁移到新路径
 - 注册表会记录通过策略校验的 `user:` / `group:` / `channel:` 目标
 - 推荐主动发送时使用 `user:` 与 `group:` 目标
 

@@ -141,7 +141,9 @@ async function convertAudioToSilk(audioPath: string): Promise<Uint8Array> {
   }
 }
 
-export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: string; timestamp: number | string }> {
+export async function sendFileQQBot(
+  params: SendFileQQBotParams
+): Promise<{ id: string; timestamp: number | string; refIdx?: string }> {
   const { cfg, target, mediaUrl, text, messageId, eventId } = params;
   const credentials = resolveQQBotCredentials(cfg);
   if (!credentials) {
@@ -223,7 +225,7 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
   }
 
   try {
-    return await sendC2CMediaMessage({
+    const result = await sendC2CMediaMessage({
       accessToken,
       openid: target.id,
       fileInfo,
@@ -231,6 +233,12 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
       ...(messageId ? { messageId } : {}),
       ...(eventId ? { eventId } : {}),
     });
+    const refIdx = result.ext_info?.ref_idx?.trim();
+    return {
+      id: result.id,
+      timestamp: result.timestamp,
+      ...(refIdx ? { refIdx } : {}),
+    };
   } catch (err) {
     const message = formatQQBotError(err);
     throw new Error(`QQBot C2C media send failed: ${message}`);

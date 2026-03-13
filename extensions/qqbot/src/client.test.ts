@@ -21,6 +21,7 @@ import {
   MediaFileType,
   clearTokenCache,
   getAccessToken,
+  sendC2CInputNotify,
   sendC2CMessage,
   sendChannelMessage,
   sendProactiveC2CMessage,
@@ -150,9 +151,12 @@ describe("getAccessToken", () => {
     mocks.httpPost.mockResolvedValue({
       id: "msg-c2c-1",
       timestamp: 1,
+      ext_info: {
+        ref_idx: "REFIDX-c2c-1",
+      },
     });
 
-    await sendC2CMessage({
+    const result = await sendC2CMessage({
       accessToken: "token-1",
       openid: "UserABC123XYZ",
       content: "| col1 | col2 |\n| --- | --- |\n| a | b |",
@@ -160,6 +164,13 @@ describe("getAccessToken", () => {
       markdown: true,
     });
 
+    expect(result).toEqual({
+      id: "msg-c2c-1",
+      timestamp: 1,
+      ext_info: {
+        ref_idx: "REFIDX-c2c-1",
+      },
+    });
     expect(mocks.httpPost).toHaveBeenCalledWith(
       "https://api.sgroup.qq.com/v2/users/UserABC123XYZ/messages",
       expect.objectContaining({
@@ -215,15 +226,25 @@ describe("getAccessToken", () => {
     mocks.httpPost.mockResolvedValue({
       id: "msg-c2c-2",
       timestamp: 2,
+      ext_info: {
+        ref_idx: "REFIDX-c2c-2",
+      },
     });
 
-    await sendProactiveC2CMessage({
+    const result = await sendProactiveC2CMessage({
       accessToken: "token-1",
       openid: "UserABC123XYZ",
       content: "| col1 | col2 |\n| --- | --- |\n| a | b |",
       markdown: true,
     });
 
+    expect(result).toEqual({
+      id: "msg-c2c-2",
+      timestamp: 2,
+      ext_info: {
+        ref_idx: "REFIDX-c2c-2",
+      },
+    });
     const body = mocks.httpPost.mock.calls[0]?.[1];
     expect(mocks.httpPost).toHaveBeenCalledWith(
       "https://api.sgroup.qq.com/v2/users/UserABC123XYZ/messages",
@@ -236,6 +257,24 @@ describe("getAccessToken", () => {
     expect(body).not.toHaveProperty("msg_seq");
     expect(body).not.toHaveProperty("msg_id");
     expect(body).not.toHaveProperty("event_id");
+  });
+
+  it("returns refIdx from C2C input notify responses", async () => {
+    mocks.httpPost.mockResolvedValue({
+      id: "notify-1",
+      timestamp: 3,
+      ext_info: {
+        ref_idx: "REFIDX-notify-1",
+      },
+    });
+
+    await expect(
+      sendC2CInputNotify({
+        accessToken: "token-1",
+        openid: "UserABC123XYZ",
+        messageId: "msg-notify-1",
+      })
+    ).resolves.toEqual({ refIdx: "REFIDX-notify-1" });
   });
 
   it("omits passive reply metadata for proactive group markdown messages", async () => {

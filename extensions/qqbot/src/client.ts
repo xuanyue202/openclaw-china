@@ -204,6 +204,14 @@ export async function getGatewayUrl(accessToken: string): Promise<string> {
   return data.url;
 }
 
+type QQBotMessageResponse = {
+  id: string;
+  timestamp: number | string;
+  ext_info?: {
+    ref_idx?: string;
+  };
+};
+
 function buildMessageBody(params: {
   content: string;
   messageId?: string;
@@ -257,7 +265,7 @@ export async function sendC2CMessage(params: {
   messageId?: string;
   eventId?: string;
   markdown?: boolean;
-}): Promise<{ id: string; timestamp: number | string }> {
+}): Promise<QQBotMessageResponse> {
   return postPassiveMessage({
     accessToken: params.accessToken,
     path: `/v2/users/${params.openid}/messages`,
@@ -303,7 +311,7 @@ export async function sendProactiveC2CMessage(params: {
   openid: string;
   content: string;
   markdown?: boolean;
-}): Promise<{ id: string; timestamp: number | string }> {
+}): Promise<QQBotMessageResponse> {
   const body = buildProactiveMessageBody({
     content: params.content,
     markdown: params.markdown,
@@ -349,8 +357,8 @@ export async function sendC2CInputNotify(params: {
   messageId?: string;
   eventId?: string;
   inputSecond?: number;
-}): Promise<void> {
-  await postPassiveMessage<void>({
+}): Promise<{ refIdx?: string }> {
+  const response = await postPassiveMessage<QQBotMessageResponse>({
     accessToken: params.accessToken,
     path: `/v2/users/${params.openid}/messages`,
     sequenceKey: resolveMsgSeqKey(params.messageId, params.eventId),
@@ -369,6 +377,8 @@ export async function sendC2CInputNotify(params: {
           : {}),
     }),
   });
+  const refIdx = response.ext_info?.ref_idx?.trim();
+  return refIdx ? { refIdx } : {};
 }
 
 export enum MediaFileType {
@@ -450,7 +460,7 @@ export async function sendC2CMediaMessage(params: {
   messageId?: string;
   eventId?: string;
   content?: string;
-}): Promise<{ id: string; timestamp: number | string }> {
+}): Promise<QQBotMessageResponse> {
   return postPassiveMessage({
     accessToken: params.accessToken,
     path: `/v2/users/${params.openid}/messages`,

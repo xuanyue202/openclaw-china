@@ -145,4 +145,33 @@ describe("sendFileQQBot", () => {
       })
     ).rejects.toThrow("code=304023");
   });
+
+  it("returns refIdx for successful C2C media sends", async () => {
+    mocks.uploadC2CMedia.mockResolvedValue({
+      file_uuid: "file-c2c-1",
+      file_info: "file-info-c2c-1",
+      ttl: 3600,
+    });
+    mocks.sendC2CMediaMessage.mockResolvedValue({
+      id: "msg-c2c-1",
+      timestamp: 5,
+      ext_info: {
+        ref_idx: "REFIDX-c2c-media-1",
+      },
+    });
+
+    const result = await sendFileQQBot({
+      cfg: { appId: "app", clientSecret: "secret" },
+      target: { kind: "c2c", id: "user-1" },
+      mediaUrl: "https://example.com/media.png",
+      text: "caption",
+      messageId: "reply-c2c-1",
+    });
+
+    expect(result).toEqual({
+      id: "msg-c2c-1",
+      timestamp: 5,
+      refIdx: "REFIDX-c2c-media-1",
+    });
+  });
 });

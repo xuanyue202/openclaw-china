@@ -1,11 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DEFAULT_ACCOUNT_ID, type PluginConfig } from "./config.js";
 import { qqbotOutbound } from "./outbound.js";
 import type { QQBotSendResult, QQChatType } from "./types.js";
 
-const DEFAULT_KNOWN_TARGETS_PATH = join(homedir(), ".openclaw", "data", "qqbot", "known-targets.json");
+const DEFAULT_KNOWN_TARGETS_PATH = join(homedir(), ".openclaw", "qqbot", "data", "known-targets.json");
+const LEGACY_KNOWN_TARGETS_PATH = join(homedir(), ".openclaw", "data", "qqbot", "known-targets.json");
 
 type KnownQQBotTargetKind = "user" | "group" | "channel";
 
@@ -54,6 +55,23 @@ function resolveKnownTargetsFilePath(options?: KnownQQBotTargetStoreOptions): st
 
 function ensureKnownTargetsDir(filePath: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
+}
+
+function migrateLegacyKnownTargets(filePath: string): void {
+  if (filePath !== DEFAULT_KNOWN_TARGETS_PATH) {
+    return;
+  }
+  if (existsSync(filePath) || !existsSync(LEGACY_KNOWN_TARGETS_PATH)) {
+    return;
+  }
+
+  ensureKnownTargetsDir(filePath);
+  try {
+    renameSync(LEGACY_KNOWN_TARGETS_PATH, filePath);
+  } catch {
+    copyFileSync(LEGACY_KNOWN_TARGETS_PATH, filePath);
+    rmSync(LEGACY_KNOWN_TARGETS_PATH, { force: true });
+  }
 }
 
 function compareTargetsByLastSeenDesc(a: KnownQQBotTarget, b: KnownQQBotTarget): number {
@@ -106,6 +124,7 @@ function parseKnownTargets(raw: string, filePath: string): KnownQQBotTarget[] {
 
 function readKnownTargets(options?: KnownQQBotTargetStoreOptions): KnownQQBotTarget[] {
   const filePath = resolveKnownTargetsFilePath(options);
+  migrateLegacyKnownTargets(filePath);
   if (!existsSync(filePath)) {
     return [];
   }
@@ -118,6 +137,7 @@ function readKnownTargets(options?: KnownQQBotTargetStoreOptions): KnownQQBotTar
 
 function writeKnownTargets(targets: KnownQQBotTarget[], options?: KnownQQBotTargetStoreOptions): void {
   const filePath = resolveKnownTargetsFilePath(options);
+  migrateLegacyKnownTargets(filePath);
   if (targets.length === 0) {
     if (existsSync(filePath)) {
       rmSync(filePath, { force: true });

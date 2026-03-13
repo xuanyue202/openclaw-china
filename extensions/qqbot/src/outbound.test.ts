@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   sendGroupMessage: vi.fn(),
   sendChannelMessage: vi.fn(),
   sendFileQQBot: vi.fn(),
+  setRefIndex: vi.fn(),
 }));
 
 vi.mock("./client.js", () => ({
@@ -24,6 +25,10 @@ vi.mock("./client.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendFileQQBot: mocks.sendFileQQBot,
+}));
+
+vi.mock("./ref-index-store.js", () => ({
+  setRefIndex: mocks.setRefIndex,
 }));
 
 import { qqbotOutbound } from "./outbound.js";
@@ -86,7 +91,13 @@ describe("qqbotOutbound event_id fallback", () => {
 
   it("uses proactive c2c sends when no passive reply context exists", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    mocks.sendProactiveC2CMessage.mockResolvedValueOnce({ id: "c2c-proactive-1", timestamp: 12 });
+    mocks.sendProactiveC2CMessage.mockResolvedValueOnce({
+      id: "c2c-proactive-1",
+      timestamp: 12,
+      ext_info: {
+        ref_idx: "REFIDX-c2c-proactive-1",
+      },
+    });
 
     const result = await qqbotOutbound.sendText({
       cfg: baseCfg,
@@ -94,13 +105,27 @@ describe("qqbotOutbound event_id fallback", () => {
       text: "| col1 | col2 |\n| --- | --- |\n| a | b |",
     });
 
-    expect(result).toEqual({ channel: "qqbot", messageId: "c2c-proactive-1", timestamp: 12 });
+    expect(result).toEqual({
+      channel: "qqbot",
+      messageId: "c2c-proactive-1",
+      timestamp: 12,
+      refIdx: "REFIDX-c2c-proactive-1",
+    });
     expect(mocks.sendProactiveC2CMessage).toHaveBeenCalledWith({
       accessToken: "token-1",
       openid: "u-proactive-1",
       content: "| col1 | col2 |\n| --- | --- |\n| a | b |",
       markdown: true,
     });
+    expect(mocks.setRefIndex).toHaveBeenCalledWith(
+      "REFIDX-c2c-proactive-1",
+      expect.objectContaining({
+        content: "| col1 | col2 |\n| --- | --- |\n| a | b |",
+        senderId: "default",
+        senderName: "default",
+        isBot: true,
+      })
+    );
     expect(mocks.sendC2CMessage).not.toHaveBeenCalled();
     expect(infoSpy).toHaveBeenCalledWith(
       expect.stringContaining("outbound action=text api=sendProactiveC2CMessage")
@@ -110,7 +135,13 @@ describe("qqbotOutbound event_id fallback", () => {
 
   it("uses passive c2c sends when reply context exists", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    mocks.sendC2CMessage.mockResolvedValueOnce({ id: "c2c-passive-1", timestamp: 13 });
+    mocks.sendC2CMessage.mockResolvedValueOnce({
+      id: "c2c-passive-1",
+      timestamp: 13,
+      ext_info: {
+        ref_idx: "REFIDX-c2c-passive-1",
+      },
+    });
 
     const result = await qqbotOutbound.sendText({
       cfg: baseCfg,
@@ -120,7 +151,12 @@ describe("qqbotOutbound event_id fallback", () => {
       replyEventId: "evt-passive-1",
     });
 
-    expect(result).toEqual({ channel: "qqbot", messageId: "c2c-passive-1", timestamp: 13 });
+    expect(result).toEqual({
+      channel: "qqbot",
+      messageId: "c2c-passive-1",
+      timestamp: 13,
+      refIdx: "REFIDX-c2c-passive-1",
+    });
     expect(mocks.sendC2CMessage).toHaveBeenCalledWith({
       accessToken: "token-1",
       openid: "u-passive-1",
@@ -128,6 +164,12 @@ describe("qqbotOutbound event_id fallback", () => {
       messageId: "msg-passive-1",
       markdown: true,
     });
+    expect(mocks.setRefIndex).toHaveBeenCalledWith(
+      "REFIDX-c2c-passive-1",
+      expect.objectContaining({
+        content: "# title",
+      })
+    );
     expect(infoSpy).toHaveBeenCalledWith(
       expect.stringContaining("outbound action=text api=sendC2CMessage")
     );
@@ -208,7 +250,11 @@ describe("qqbotOutbound event_id fallback", () => {
   });
 
   it("sends follow-up text after generic file delivery", async () => {
-    mocks.sendFileQQBot.mockResolvedValueOnce({ id: "media-2", timestamp: 3 });
+    mocks.sendFileQQBot.mockResolvedValueOnce({
+      id: "media-2",
+      timestamp: 3,
+      refIdx: "REFIDX-media-2",
+    });
     mocks.sendC2CMessage.mockResolvedValueOnce({ id: "text-1", timestamp: 4 });
 
     const result = await qqbotOutbound.sendMedia({
@@ -219,12 +265,30 @@ describe("qqbotOutbound event_id fallback", () => {
       replyToId: "msg-3",
     });
 
-    expect(result).toEqual({ channel: "qqbot", messageId: "media-2", timestamp: 3 });
+    expect(result).toEqual({
+      channel: "qqbot",
+      messageId: "media-2",
+      timestamp: 3,
+      refIdx: "REFIDX-media-2",
+    });
     expect(mocks.sendFileQQBot).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaUrl: "C:/tmp/report.pdf",
         text: undefined,
         messageId: "msg-3",
+      })
+    );
+    expect(mocks.setRefIndex).toHaveBeenCalledWith(
+      "REFIDX-media-2",
+      expect.objectContaining({
+        content: "",
+        attachments: [
+          expect.objectContaining({
+            type: "file",
+            filename: "report.pdf",
+            localPath: "C:/tmp/report.pdf",
+          }),
+        ],
       })
     );
     expect(mocks.sendC2CMessage).toHaveBeenCalledWith(
@@ -234,5 +298,17 @@ describe("qqbotOutbound event_id fallback", () => {
         messageId: "msg-3",
       })
     );
+  });
+
+  it("does not store ref-index entries for group sends", async () => {
+    mocks.sendProactiveGroupMessage.mockResolvedValueOnce({ id: "group-no-store-1", timestamp: 15 });
+
+    await qqbotOutbound.sendText({
+      cfg: baseCfg,
+      to: "group:g-no-store",
+      text: "hello group",
+    });
+
+    expect(mocks.setRefIndex).not.toHaveBeenCalled();
   });
 });
