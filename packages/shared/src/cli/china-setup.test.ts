@@ -62,7 +62,7 @@ function createCommandNode(): CommandNode {
   return node;
 }
 
-async function runSetup(initialConfig: ConfigRoot): Promise<{
+async function runSetup(initialConfig: ConfigRoot, channels: string[] = ["wecom"]): Promise<{
   writeConfigFile: ReturnType<typeof vi.fn>;
   channels?: string[];
 }> {
@@ -78,11 +78,11 @@ async function runSetup(initialConfig: ConfigRoot): Promise<{
           writeConfigFile,
         },
       },
-      registerCli: (nextRegistrar) => {
-        registrar = nextRegistrar;
+        registerCli: (nextRegistrar) => {
+          registrar = nextRegistrar;
+        },
       },
-    },
-    { channels: ["wecom"] }
+    { channels }
   );
 
   const program = createCommandNode();
@@ -177,6 +177,74 @@ describe("china setup wecom", () => {
 
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(selectOptions.some((option) => option.label === "WeCom（企业微信-智能机器人）（已配置）")).toBe(true);
+  });
+});
+
+describe("china setup wecom-kf", () => {
+  const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete (globalThis as Record<PropertyKey, unknown>)[CLI_STATE_KEY];
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    Object.defineProperty(process.stdout, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+  });
+
+  afterEach(() => {
+    if (stdinDescriptor) {
+      Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
+    }
+    if (stdoutDescriptor) {
+      Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+    }
+  });
+
+  it("stores wecom-kf callback and api credentials", async () => {
+    selectMock.mockResolvedValueOnce("wecom-kf");
+    textMock
+      .mockResolvedValueOnce("/kf-hook")
+      .mockResolvedValueOnce("callback-token")
+      .mockResolvedValueOnce("encoding-aes-key")
+      .mockResolvedValueOnce("ww-test-corp")
+      .mockResolvedValueOnce("kf-secret")
+      .mockResolvedValueOnce("wk-test")
+      .mockResolvedValueOnce("你好，这里是 AI 客服");
+
+    const { writeConfigFile } = await runSetup({}, ["wecom-kf"]);
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const savedConfig = writeConfigFile.mock.calls[0]?.[0] as ConfigRoot;
+    const wecomKfConfig = savedConfig.channels?.["wecom-kf"];
+
+    expect(wecomKfConfig?.enabled).toBe(true);
+    expect(wecomKfConfig?.webhookPath).toBe("/kf-hook");
+    expect(wecomKfConfig?.token).toBe("callback-token");
+    expect(wecomKfConfig?.encodingAESKey).toBe("encoding-aes-key");
+    expect(wecomKfConfig?.corpId).toBe("ww-test-corp");
+    expect(wecomKfConfig?.corpSecret).toBe("kf-secret");
+    expect(wecomKfConfig?.openKfId).toBe("wk-test");
+    expect(wecomKfConfig?.welcomeText).toBe("你好，这里是 AI 客服");
+
+    const promptMessages = textMock.mock.calls.map((call) => {
+      const firstArg = call[0] as { message?: string } | undefined;
+      return firstArg?.message ?? "";
+    });
+    expect(promptMessages).toEqual([
+      "Webhook 路径（默认 /wecom-kf）",
+      "微信客服回调 Token",
+      "微信客服回调 EncodingAESKey",
+      "corpId",
+      "微信客服 Secret",
+      "open_kfid",
+      "欢迎语（可选）",
+    ]);
   });
 });
 

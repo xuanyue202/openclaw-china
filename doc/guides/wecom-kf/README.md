@@ -1,118 +1,163 @@
-# 企业微信「微信客服」插件开发文档清单
+# 微信客服（WeCom KF）接入说明
 
-本文档汇总实现 OpenClaw China 企业微信微信客服渠道插件时，建议优先阅读的企业微信官方文档。
+## 概述
 
-目标是先打通最小闭环：
+`wecom-kf` 是一个独立的 OpenClaw 渠道，用于把企业微信「微信客服」接入 OpenClaw，使外部微信用户可以通过客服入口与 Agent 对话。
 
-1. 获取 `access_token`
-2. 搭建回调 URL，完成签名校验与解密
-3. 接收微信客服消息和事件
-4. 给外部微信用户发送消息
-5. 逐步补充客服账号管理、接待人员管理、会话分配和媒体能力
+需要注意的是，微信客服虽然在后台要关联一个企业微信自建应用作为“可调用接口的应用”，但它运行时使用的并不是普通自建应用消息接口那套参数模型。当前插件调用微信客服接口时，使用的是：
 
-以下官方链接已于 `2026-03-09` 校验，来源均为企业微信开发者中心。
+- `corpId`
+- 微信客服 `Secret`
+- 回调 `Token`
+- 回调 `EncodingAESKey`
+- 客服账号 `open_kfid`
 
-## 1. 微信客服的定位
+而不是普通自建应用常见的：
 
-微信客服和现有的企业微信自建应用、企业微信智能机器人不是一套能力。
+- `agentId`
+- 普通自建应用 `Secret`
+- 普通应用消息回调配置
 
-| 能力 | 微信客服 | 自建应用 | 智能机器人 |
-| --- | --- | --- | --- |
-| 主要面向对象 | 外部微信用户 | 企业内部成员 | 企业微信会话中的用户和群 |
-| 主要场景 | 售前、售后、在线客服 | OA、审批、通知、业务系统接入 | AI 助手、问答助手、群机器人 |
-| 核心对象模型 | `open_kfid`、接待人员、客服会话 | `agentid`、成员、部门、标签 | `BotID`、回调 URL / WebSocket |
-| 是否可直接服务外部微信用户 | 是 | 否 | 否 |
+## 当前基础版支持范围
 
-如果要做的是“企业对外客服”插件，应优先看微信客服接口，而不是复用 `wecom` 或 `wecom-app` 的接口模型。
+- 单账号配置
+- 回调 `GET` / `POST` 校验
+- 通过 `sync_msg` 拉取真实消息
+- `cursor` 持久化和短期 `msgid` 去重
+- 客户文本消息入站
+- Agent 文本回复回发
+- `enter_session` 欢迎语
+- 基础状态与日志
 
-## 2. 最小必读文档（P0）
+当前不包含：
 
-下面这些文档构成插件 MVP 的最小必读集合。
+- 多账号正式运行
+- 图片、语音、文件等媒体收发
+- 客服账号管理、会话分配、客户画像增强、第三方代运营模式
 
-| 文档 | 链接 | 插件里解决的问题 |
-| --- | --- | --- |
-| 获取 `access_token` | <https://developer.work.weixin.qq.com/document/path/91039> | 用自建应用 `corpsecret` 获取接口调用凭证，后续所有 `cgi-bin/kf/*` 请求都依赖它 |
-| 回调配置 | <https://developer.work.weixin.qq.com/document/path/90930> | 实现回调 URL 校验、签名校验、AES 解密、POST 回调接收 |
-| 微信客服概述 | <https://developer.work.weixin.qq.com/document/path/94638> | 理解微信客服对象模型、后台开通方式、API 接管方式、接入场景 |
-| 接收消息和事件 | <https://developer.work.weixin.qq.com/document/path/94670> | 处理外部微信用户消息、系统事件、客服会话回调 |
-| 发送消息 | <https://developer.work.weixin.qq.com/document/path/94677> | 给外部微信用户发送文本、图片、语音、视频、文件、图文、小程序、菜单等消息 |
-| 发送欢迎语等事件响应消息 | <https://developer.work.weixin.qq.com/document/path/95122> | 在欢迎语、进入接待、事件型回调中返回响应消息 |
+## 如何使用新插件
 
-推荐阅读顺序：
+### 1. 安装插件
 
-1. `91039`
-2. `90930`
-3. `94638`
-4. `94670`
-5. `94677`
-6. `95122`
+推荐通过 OpenClaw China 聚合包安装，这样后续如果还要接入其他中国区渠道，不需要重复安装：
 
-## 3. 常用补充文档（P1）
+```bash
+openclaw plugins install @openclaw-china/channels
+openclaw china setup
+openclaw config set gateway.bind lan
+```
 
-这些文档通常会在插件第二阶段用到。
+如果你的环境已经可以直接安装单独渠道包，也可以只装 `wecom-kf`：
 
-| 文档 | 链接 | 适用场景 |
-| --- | --- | --- |
-| 获取客服账号列表 | <https://developer.work.weixin.qq.com/document/path/94661> | 启动时同步可管理的客服账号，或做配置校验 |
-| 获取客服账号链接 | <https://developer.work.weixin.qq.com/document/path/94665> | 需要把客服入口挂到网页、App、公众号、小程序等场景时使用 |
-| 回调通知 | <https://developer.work.weixin.qq.com/document/path/97712> | 处理客服账号授权变化等平台级事件 |
-| 获取客户基础信息 | <https://developer.work.weixin.qq.com/document/path/95159> | 补充外部用户资料、构建用户画像或会话元数据 |
-| 上传临时素材 | <https://developer.work.weixin.qq.com/document/path/90253> | 发送图片、语音、视频、文件前，先上传素材获取 `media_id` |
+```bash
+openclaw plugins install @openclaw-china/wecom-kf
+openclaw china setup
+openclaw config set gateway.bind lan
+```
 
-## 4. 完整管理能力文档（P2）
+如果你是在当前仓库里开发或本地联调，推荐直接从源码链接安装：
 
-如果插件后续要覆盖完整客服管理能力，还需要这些文档：
+```bash
+git clone https://github.com/BytePioneer-AI/openclaw-china.git
+cd openclaw-china
+pnpm install
+pnpm build
 
-| 文档 | 链接 | 作用 |
-| --- | --- | --- |
-| 添加客服账号 | <https://developer.work.weixin.qq.com/document/path/94662> | 创建客服账号 |
-| 删除客服账号 | <https://developer.work.weixin.qq.com/document/path/94663> | 删除客服账号 |
-| 修改客服账号 | <https://developer.work.weixin.qq.com/document/path/94664> | 更新客服账号资料 |
-| 获取接待人员列表 | <https://developer.work.weixin.qq.com/document/path/94645> | 查询客服账号下的接待人员 |
-| 添加接待人员 | <https://developer.work.weixin.qq.com/document/path/94646> | 维护客服接待成员 |
-| 删除接待人员 | <https://developer.work.weixin.qq.com/document/path/94647> | 移除接待成员 |
-| 分配客服会话 | <https://developer.work.weixin.qq.com/document/path/94669> | 插件自己实现会话路由和分配策略 |
+# 二选一：
+openclaw plugins install -l ./packages/channels
+openclaw plugins install -l ./extensions/wecom-kf
 
-## 5. 容易漏掉的后台前置条件
+openclaw china setup
+openclaw config set gateway.bind lan
+```
 
-这些点如果漏掉，接口通常会调不通，或者表面成功但没有实际效果。
+说明：
 
-1. 需要先在企业微信管理后台的“微信客服应用 -> API”中，把一个自建应用配置到“可调用接口的应用”。
-2. 需要在“通过 API 管理微信客服账号 -> 企业内部开发”中，把具体客服账号授权给该应用，否则插件不能真正接管会话和消息。
-3. 客服账号对应的接待人员必须处于该应用的可见范围内，否则部分接口会报错，官方文档中明确提到可能返回 `60030`。
-4. 回调服务必须同时支持 `HTTP GET` 和 `HTTP POST`。
-5. 回调参数需要使用 `Token` 做签名校验，使用 `EncodingAESKey` 做消息解密。
-6. `access_token` 需要按应用维度缓存，不能频繁调用 `gettoken`。
+- `openclaw china setup` 已支持 `WeCom KF（微信客服）`
+- `gateway.bind lan` 的目的是让回调地址更容易被反向代理或内网穿透工具访问
+- 如果在 Windows 上遇到 npm 安装兼容性问题，优先使用“源码链接安装”
 
-## 6. 推荐 MVP 范围
+### 2. 配置插件
 
-结合本仓库“先聚焦消息收发、额外能力后置”的约定，微信客服插件建议先做下面这些能力：
+推荐方式是直接运行：
 
-1. 单账号配置
-2. 单个 `open_kfid` 或少量手工配置的 `open_kfid`
-3. 回调验签与解密
-4. 文本消息接收
-5. 文本消息发送
-6. 欢迎语 / 事件响应消息
+```bash
+openclaw china setup
+```
 
-建议先不要在第一版就做：
+然后在交互式向导中选择 `WeCom KF（微信客服）`，依次填写：
 
-- 客服账号的全量 CRUD
-- 接待人员自动同步
-- 自定义会话分配策略
-- 统计接口
-- 知识库 / 机器人管理
-- 全媒体消息支持
+- `webhookPath`
+- `token`
+- `encodingAESKey`
+- `corpId`
+- `corpSecret`
+- `openKfId`
+- `welcomeText`（可选）
 
-## 7. 对应到本仓库的插件设计建议
+如果你不使用向导，也可以手动编辑 OpenClaw 配置文件中的 `channels.wecom-kf`，配置示例见下文。
 
-如果后续在本仓库落地插件，建议按现有目录和配置习惯处理：
+### 3. 启动 OpenClaw Gateway
 
-- 插件目录建议：`extensions/wecom-kf/`
-- 配置入口建议：`channels.wecom-kf`
-- 多账号配置建议：`channels.wecom-kf.accounts.<accountId>`
+```bash
+openclaw gateway --port 18789 --verbose
+```
 
-第一版配置字段建议至少包含：
+启动后，需要准备一个可以从公网访问到 OpenClaw Gateway 的地址，例如：
+
+```text
+https://your-domain.example.com/wecom-kf
+```
+
+要求：
+
+- 回调路径必须和 `webhookPath` 一致
+- 回调服务必须同时支持 `GET` 和 `POST`
+- 微信客服后台保存回调配置时，会先发起一次 `GET` 验证
+
+### 4. 在微信客服后台完成绑定
+
+插件启动后，还需要在微信客服后台把平台配置补齐：
+
+1. 在微信客服管理后台开启 API
+2. 将某个企业微信自建应用设置为“可调用接口的应用”
+3. 将具体客服账号授权给该应用
+4. 确保接待成员处于该应用可见范围内
+5. 配置回调 URL、`Token`、`EncodingAESKey`
+
+其中：
+
+- 回调 URL 填公网地址，例如 `https://your-domain.example.com/wecom-kf`
+- `Token` 和 `EncodingAESKey` 必须与 OpenClaw 配置完全一致
+
+### 5. 进行联调验证
+
+完成配置后，建议按下面顺序验证：
+
+1. 启动 OpenClaw Gateway
+2. 用微信用户进入客服会话或发送一条文本消息
+3. 观察 OpenClaw 日志里是否出现 `[wecom-kf]` 相关输出
+4. 确认 OpenClaw 能够通过 `sync_msg` 拉到消息并回发文本回复
+
+首版联调通过的最小标准是：
+
+- 微信用户能发进来
+- OpenClaw 能收到并路由给 Agent
+- Agent 回复能通过微信客服接口回发给用户
+
+### 6. 主动发送时的目标格式
+
+如果后续需要通过 OpenClaw 的渠道发送能力直接给某个外部用户发消息，当前插件识别的目标格式是：
+
+- `user:<external_userid>`
+- `wecom-kf:user:<external_userid>`
+- `user:<external_userid>@<accountId>`
+
+基础版的核心目标标识是 `external_userid`，不是企业微信内部成员的 `userid`。
+
+## 需要配置哪些参数
+
+当前基础版建议至少配置以下参数：
 
 ```json
 {
@@ -120,11 +165,13 @@
     "wecom-kf": {
       "enabled": true,
       "webhookPath": "/wecom-kf",
-      "token": "your-token",
+      "corpId": "ww1234567890abcdef",
+      "corpSecret": "your-wecom-kf-secret",
+      "openKfId": "wkABCDEF1234567890",
+      "token": "your-callback-token",
       "encodingAESKey": "your-43-char-encoding-aes-key",
-      "corpId": "your-corp-id",
-      "corpSecret": "your-app-secret",
-      "openKfId": "your-open-kfid"
+      "welcomeText": "你好，我是 AI 客服，请问有什么可以帮你？",
+      "dmPolicy": "open"
     }
   }
 }
@@ -132,15 +179,145 @@
 
 其中：
 
-- `corpId` / `corpSecret` 用于获取 `access_token`
-- `token` / `encodingAESKey` 用于回调签名与解密
-- `webhookPath` 用于接收企业微信回调
-- `openKfId` 用于默认发送的客服账号标识
+- `enabled`：是否启用该渠道
+- `webhookPath`：OpenClaw 暴露的回调路径；不填时基础版默认 `/wecom-kf`
+- `corpId`：企业 ID
+- `corpSecret`：微信客服 `Secret`
+- `openKfId`：客服账号 ID，即 `open_kfid`
+- `token`：回调验签使用的 Token
+- `encodingAESKey`：回调解密使用的 43 位密钥
+- `welcomeText`：可选，收到 `enter_session` 事件时发送欢迎语
+- `dmPolicy`：可选，控制允许哪些外部用户进入 DM 路由
 
-## 8. 建议的开发落地顺序
+## 哪些是硬要求
 
-1. 先读完 P0 文档，把鉴权、回调、文本收发打通
-2. 再补 P1 文档，把 `open_kfid` 管理和外部入口能力补齐
-3. 最后再做 P2 能力，把账号、接待人员、会话分配、媒体和统计扩展完整
+当前插件要进入“已配置”并注册 webhook，至少需要这些参数：
 
-如果只追求“渠道先可用”，看到 P0 就可以开始写插件代码了。
+- `corpId`
+- `corpSecret`
+- `token`
+- `encodingAESKey`
+
+同时实际部署时还应配置：
+
+- `webhookPath`
+
+建议一并配置：
+
+- `openKfId`
+
+原因是：
+
+- `openKfId` 用于发送消息时标识具体客服账号
+- 首版冷启动拉取游标时也会优先按 `open_kfid` 建立消费位置
+- 如果完全没有 `openKfId`，某些主动发送场景会失败
+
+## 参数从哪里获取
+
+### 1. `corpId`
+
+来自微信客服管理后台的企业信息。
+
+官方原始说明见：
+- `doc/guides/wecom-kf/doc/kf接口文档/开发指引.md`
+
+### 2. `corpSecret`
+
+这里填写的是“微信客服 Secret”，不是普通自建应用 Secret。
+
+官方文档明确写明：
+
+- 微信客服 `Secret` 可在“微信客服管理后台 -> 开发配置”获取
+- `access_token` 由企业 ID 和微信客服 `Secret` 产生
+- `gettoken` 接口中的 `corpsecret` 字段说明就是“微信客服Secret”
+
+对应原文位置：
+- [开发指引](./doc/kf接口文档/开发指引.md)
+
+### 3. `token`
+
+这是你在微信客服后台配置回调 URL 时，自定义填写的回调签名 Token。
+
+它的作用是：
+
+- 校验请求是否来自微信客服
+- 防止回调内容被伪造或篡改
+
+### 4. `encodingAESKey`
+
+这是你在微信客服后台配置回调 URL 时，自定义填写的消息加密密钥。
+
+它的作用是：
+
+- 解密微信客服推送过来的回调消息体
+
+### 5. `openKfId`
+
+这是客服账号 ID，即 `open_kfid`。
+
+它用于：
+
+- 作为发送消息时指定的客服账号身份
+- 区分不同客服账号的消息拉取和游标
+
+如果后续不确定具体值，可通过微信客服账号相关接口补查；但基础版接入时，建议直接在后台确认并配置。
+
+## 为什么还要配置自建应用
+
+这是最容易混淆的一点。
+
+当前官方约束是：
+
+1. 微信客服后台必须指定某个企业微信自建应用作为“可调用接口的应用”
+2. 具体客服账号要授权给这个应用
+3. 接待成员要在该应用的可见范围内
+
+这说明：
+
+- 自建应用在平台侧是授权载体
+- 但插件运行时并不直接用普通自建应用的 `agentId` 或普通应用 `Secret` 调微信客服接口
+
+换句话说：
+
+- 后台上：需要一个自建应用承接权限
+- 配置上：当前 `wecom-kf` 插件不需要额外填写普通自建应用的 `agentId`、普通应用 `Secret`
+- 运行时：实际调用微信客服 API 时，使用的是 `corpId + 微信客服 Secret`
+
+## 当前实现是否需要普通自建应用参数
+
+当前基础版 `wecom-kf` 插件不要求填写以下字段：
+
+- `agentId`
+- 普通自建应用 `Secret`
+- 普通自建应用消息回调 Token
+- 普通自建应用消息回调 EncodingAESKey
+
+原因不是这些后台对象不存在，而是它们不属于当前微信客服 API 调用所需的运行时参数。
+
+## 后台前置条件
+
+在代码可运行之前，还需要满足这些后台条件：
+
+1. 企业已在微信客服管理后台开通并启用 API
+2. 已将某个自建应用配置为“可调用接口的应用”
+3. 具体客服账号已授权给该应用
+4. 客服账号对应的接待成员处于该应用可见范围内
+5. 回调服务支持 `HTTP GET` 和 `HTTP POST`
+6. 回调 URL 可以被公网访问
+
+如果这些前置条件不满足，即使本地配置完整，接口也可能无法真正收发消息。
+
+## 已知限制
+
+- 微信客服回调只发通知，不直接携带完整消息体
+- 插件需要从回调中取出 `token` 和可选 `open_kfid`，再调用 `sync_msg`
+- 文本回发受 48 小时窗口和最多 5 条消息限制
+- 单条文本最多 2048 字节，因此插件会做纯文本降级和分片
+- 欢迎语依赖 `welcome_code`，需在事件触发后 20 秒内调用一次
+
+## 相关文档
+
+- [配置说明](./configuration.md)
+- [开发背景](./doc/开发背景.md)
+- [开发计划](./doc/开发计划.md)
+- [微信客服官方接口文档](./doc/kf接口文档/)

@@ -47,6 +47,13 @@ import {
 } from "@openclaw-china/wecom-app";
 import wecomAppEntry from "@openclaw-china/wecom-app";
 import {
+  wecomKfPlugin,
+  DEFAULT_ACCOUNT_ID as WECOM_KF_DEFAULT_ACCOUNT_ID,
+  setWecomKfRuntime,
+  getWecomKfRuntime,
+} from "@openclaw-china/wecom-kf";
+import wecomKfEntry from "@openclaw-china/wecom-kf";
+import {
   qqbotPlugin,
   DEFAULT_ACCOUNT_ID as QQBOT_DEFAULT_ACCOUNT_ID,
   setQQBotRuntime,
@@ -82,6 +89,10 @@ export {
   clearAllAccessTokenCache,
   downloadAndSendImage,
   sendWecomAppImageMessage,
+  wecomKfPlugin,
+  WECOM_KF_DEFAULT_ACCOUNT_ID,
+  setWecomKfRuntime,
+  getWecomKfRuntime,
   qqbotPlugin,
   QQBOT_DEFAULT_ACCOUNT_ID,
   setQQBotRuntime,
@@ -107,6 +118,14 @@ export type {
   WecomAppSendTarget,
   AccessTokenCacheEntry,
 } from "@openclaw-china/wecom-app";
+export type {
+  WecomKfConfig,
+  WecomKfAccountConfig,
+  ResolvedWecomKfAccount,
+  WecomKfDmPolicy,
+  SyncMsgItem as WecomKfSyncMsgItem,
+  SyncMsgResponse as WecomKfSyncMsgResponse,
+} from "@openclaw-china/wecom-kf";
 export type { QQBotConfig, ResolvedQQBotAccount, QQBotSendResult } from "@openclaw-china/qqbot";
 
 // TODO: 后续添加其他渠道
@@ -141,6 +160,16 @@ export interface WecomAppRouteConfig extends ChannelConfig {
   >;
 }
 
+export interface WecomKfRouteConfig extends ChannelConfig {
+  webhookPath?: string;
+  accounts?: Record<
+    string,
+    {
+      webhookPath?: string;
+    }
+  >;
+}
+
 /**
  * Moltbot 配置接口（符合官方约定）
  * 配置路径: channels.<id>.enabled
@@ -151,6 +180,7 @@ export interface MoltbotConfig {
     "feishu-china"?: ChannelConfig;
     wecom?: WecomRouteConfig;
     "wecom-app"?: WecomAppRouteConfig;
+    "wecom-kf"?: WecomKfRouteConfig;
     qqbot?: ChannelConfig;
     qq?: ChannelConfig;
     [key: string]: ChannelConfig | undefined;
@@ -184,7 +214,7 @@ export interface MoltbotPluginApi {
 /**
  * 支持的渠道列表
  */
-export const SUPPORTED_CHANNELS = ["dingtalk", "feishu-china", "wecom", "wecom-app", "qqbot"] as const;
+export const SUPPORTED_CHANNELS = ["dingtalk", "feishu-china", "wecom", "wecom-app", "wecom-kf", "qqbot"] as const;
 // TODO: 鍚庣画娣诲姞 "qq"
 
 export type SupportedChannel = (typeof SUPPORTED_CHANNELS)[number];
@@ -208,6 +238,11 @@ const channelPlugins: Record<SupportedChannel, { register: (api: MoltbotPluginAp
   "wecom-app": {
     register: (api: MoltbotPluginApi) => {
       wecomAppEntry.register(api);
+    },
+  },
+  "wecom-kf": {
+    register: (api: MoltbotPluginApi) => {
+      wecomKfEntry.register(api);
     },
   },
   qqbot: {

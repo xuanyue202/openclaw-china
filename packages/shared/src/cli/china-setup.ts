@@ -51,7 +51,7 @@ type ConfigRoot = {
   [key: string]: unknown;
 };
 
-export type ChannelId = "dingtalk" | "feishu-china" | "wecom" | "wecom-app" | "qqbot";
+export type ChannelId = "dingtalk" | "feishu-china" | "wecom" | "wecom-app" | "wecom-kf" | "qqbot";
 
 export type RegisterChinaSetupCliOptions = {
   channels?: readonly ChannelId[];
@@ -77,6 +77,7 @@ const CHANNEL_ORDER: readonly ChannelId[] = [
   "qqbot",
   "wecom",
   "wecom-app",
+  "wecom-kf",
   "feishu-china",
 ];
 const CHANNEL_DISPLAY_LABELS: Record<ChannelId, string> = {
@@ -84,6 +85,7 @@ const CHANNEL_DISPLAY_LABELS: Record<ChannelId, string> = {
   "feishu-china": "Feishu（飞书）",
   wecom: "WeCom（企业微信-智能机器人）",
   "wecom-app": "WeCom App（自建应用-可接入微信）",
+  "wecom-kf": "WeCom KF（微信客服）",
   qqbot: "QQBot（QQ 机器人）",
 };
 const CHANNEL_GUIDE_LINKS: Record<ChannelId, string> = {
@@ -91,6 +93,7 @@ const CHANNEL_GUIDE_LINKS: Record<ChannelId, string> = {
   "feishu-china": "https://github.com/BytePioneer-AI/openclaw-china/blob/main/README.md",
   wecom: `${GUIDES_BASE}/wecom/configuration.md`,
   "wecom-app": `${GUIDES_BASE}/wecom-app/configuration.md`,
+  "wecom-kf": "https://github.com/BytePioneer-AI/openclaw-china/blob/main/extensions/wecom-kf/README.md",
   qqbot: `${GUIDES_BASE}/qqbot/configuration.md`,
 };
 const CHINA_CLI_STATE_KEY = Symbol.for("@openclaw-china/china-cli-state");
@@ -335,6 +338,13 @@ function isChannelConfigured(cfg: ConfigRoot, channelId: ChannelId): boolean {
       return hasWecomWsCredentialPair(channelCfg);
     case "wecom-app":
       return hasTokenPair(channelCfg);
+    case "wecom-kf":
+      return (
+        hasNonEmptyString(channelCfg.corpId) &&
+        hasNonEmptyString(channelCfg.corpSecret) &&
+        hasNonEmptyString(channelCfg.token) &&
+        hasNonEmptyString(channelCfg.encodingAESKey)
+      );
     default:
       return false;
   }
@@ -638,6 +648,58 @@ async function configureWecomApp(prompter: SetupPrompter, cfg: ConfigRoot): Prom
   return mergeChannelConfig(cfg, "wecom-app", patch);
 }
 
+async function configureWecomKf(prompter: SetupPrompter, cfg: ConfigRoot): Promise<ConfigRoot> {
+  section("配置 WeCom KF（微信客服）");
+  showGuideLink("wecom-kf");
+  const existing = getChannelConfig(cfg, "wecom-kf");
+
+  const webhookPath = await prompter.askText({
+    label: "Webhook 路径（默认 /wecom-kf）",
+    defaultValue: toTrimmedString(existing.webhookPath) ?? "/wecom-kf",
+    required: true,
+  });
+  const token = await prompter.askSecret({
+    label: "微信客服回调 Token",
+    existingValue: toTrimmedString(existing.token),
+    required: true,
+  });
+  const encodingAESKey = await prompter.askSecret({
+    label: "微信客服回调 EncodingAESKey",
+    existingValue: toTrimmedString(existing.encodingAESKey),
+    required: true,
+  });
+  const corpId = await prompter.askText({
+    label: "corpId",
+    defaultValue: toTrimmedString(existing.corpId),
+    required: true,
+  });
+  const corpSecret = await prompter.askSecret({
+    label: "微信客服 Secret",
+    existingValue: toTrimmedString(existing.corpSecret),
+    required: true,
+  });
+  const openKfId = await prompter.askText({
+    label: "open_kfid",
+    defaultValue: toTrimmedString(existing.openKfId),
+    required: true,
+  });
+  const welcomeText = await prompter.askText({
+    label: "欢迎语（可选）",
+    defaultValue: toTrimmedString(existing.welcomeText),
+    required: false,
+  });
+
+  return mergeChannelConfig(cfg, "wecom-kf", {
+    webhookPath,
+    token,
+    encodingAESKey,
+    corpId,
+    corpSecret,
+    openKfId,
+    welcomeText: welcomeText || undefined,
+  });
+}
+
 async function configureQQBot(prompter: SetupPrompter, cfg: ConfigRoot): Promise<ConfigRoot> {
   section("配置 QQBot（QQ 机器人）");
   showGuideLink("qqbot");
@@ -702,6 +764,8 @@ async function configureSingleChannel(
       return configureWecom(prompter, cfg);
     case "wecom-app":
       return configureWecomApp(prompter, cfg);
+    case "wecom-kf":
+      return configureWecomKf(prompter, cfg);
     case "qqbot":
       return configureQQBot(prompter, cfg);
     default:
