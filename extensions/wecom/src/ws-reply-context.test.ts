@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  WECOM_WS_FINISH_FALLBACK_MESSAGE,
+  WECOM_WS_THINKING_MESSAGE,
   appendWecomWsActiveStreamChunk,
   appendWecomWsActiveStreamReply,
   bindWecomWsRouteContext,
@@ -204,7 +206,7 @@ describe("wecom ws reply context", () => {
       sendWecomWsMessagePlaceholder({
         accountId: "acc-1",
         reqId: "req-placeholder",
-        content: "⏳",
+        content: WECOM_WS_THINKING_MESSAGE,
       })
     ).resolves.toBe(true);
 
@@ -227,7 +229,7 @@ describe("wecom ws reply context", () => {
         stream: {
           id: "stream-placeholder",
           finish: false,
-          content: "⏳",
+          content: WECOM_WS_THINKING_MESSAGE,
         },
       },
     });
@@ -246,6 +248,52 @@ describe("wecom ws reply context", () => {
           id: "stream-placeholder",
           finish: true,
           content: "final answer",
+        },
+      },
+    });
+  });
+
+  it("replaces the thinking placeholder with a visible finish message when no real chunk arrives", async () => {
+    const sent: unknown[] = [];
+    registerWecomWsMessageContext({
+      accountId: "acc-1",
+      reqId: "req-thinking-only",
+      to: "user:alice",
+      send: async (frame) => {
+        sent.push(frame);
+      },
+      streamId: "stream-thinking-only",
+    });
+
+    await expect(
+      sendWecomWsMessagePlaceholder({
+        accountId: "acc-1",
+        reqId: "req-thinking-only",
+        content: WECOM_WS_THINKING_MESSAGE,
+      })
+    ).resolves.toBe(true);
+
+    await finishWecomWsMessageContext({
+      accountId: "acc-1",
+      reqId: "req-thinking-only",
+    });
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toMatchObject({
+      body: {
+        stream: {
+          id: "stream-thinking-only",
+          finish: false,
+          content: WECOM_WS_THINKING_MESSAGE,
+        },
+      },
+    });
+    expect(sent[1]).toMatchObject({
+      body: {
+        stream: {
+          id: "stream-thinking-only",
+          finish: true,
+          content: WECOM_WS_FINISH_FALLBACK_MESSAGE,
         },
       },
     });

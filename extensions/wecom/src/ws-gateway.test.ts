@@ -11,6 +11,7 @@ vi.mock("@wecom/aibot-node-sdk", async () => await import("./test-sdk-mock.js"))
 
 import { resolveWecomAccount, type PluginConfig } from "./config.js";
 import { clearWecomRuntime, setWecomRuntime } from "./runtime.js";
+import { WECOM_WS_THINKING_MESSAGE } from "./ws-reply-context.js";
 import {
   sendWecomWsProactiveMarkdown,
   startWecomWsGateway,
@@ -328,7 +329,7 @@ describe("wecom ws gateway", () => {
         msgtype: "stream",
         stream: {
           finish: false,
-          content: "⏳",
+          content: WECOM_WS_THINKING_MESSAGE,
         },
       },
     });

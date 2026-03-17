@@ -9,6 +9,7 @@ import { dispatchWecomMessage } from "./bot.js";
 import { fetchAndSaveWecomDocMcpConfig } from "./mcp-config.js";
 import { tryGetWecomRuntime } from "./runtime.js";
 import {
+  WECOM_WS_THINKING_MESSAGE,
   appendWecomWsActiveStreamChunk,
   appendWecomWsActiveStreamReply,
   bindWecomWsRouteContext,
@@ -456,7 +457,7 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
             void sendWecomWsMessagePlaceholder({
               accountId: account.accountId,
               reqId: callback.reqId,
-              content: "⏳",
+              content: WECOM_WS_THINKING_MESSAGE,
             }).catch((err) => {
               logger.warn(`wecom ws placeholder ack failed: ${String(err)}`);
             });
