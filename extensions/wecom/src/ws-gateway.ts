@@ -39,6 +39,7 @@ type ActiveConnection = {
 const activeConnections = new Map<string, ActiveConnection>();
 const processedMessageIds = new Map<string, number>();
 const PROCESSED_MESSAGE_TTL_MS = 10 * 60 * 1000;
+const WECOM_WS_SHUTDOWN_GRACE_MS = 1_000;
 const activatedTargets = new Map<
   string,
   {
@@ -177,7 +178,16 @@ function summarizeWecomReplyFrame(frame: WecomWsFrame): string {
   return JSON.stringify(summary);
 }
 
-function createSdkLogger(logger: Logger) {
+function isExpectedShutdownWsLog(message: string): boolean {
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("invalid websocket frame") ||
+    lowered.includes("invalid opcode") ||
+    lowered.includes("websocket connection closed: code: 1006")
+  );
+}
+
+function createSdkLogger(logger: Logger, opts?: { isShuttingDown?: () => boolean }) {
   return {
     debug(message: string, ...args: unknown[]) {
       logger.debug(formatLogMessage(message, args));
@@ -186,12 +196,27 @@ function createSdkLogger(logger: Logger) {
       logger.info(formatLogMessage(message, args));
     },
     warn(message: string, ...args: unknown[]) {
-      logger.warn(formatLogMessage(message, args));
+      const formatted = formatLogMessage(message, args);
+      if (opts?.isShuttingDown?.() && isExpectedShutdownWsLog(formatted)) {
+        logger.debug(`wecom ws shutdown noise suppressed: ${formatted}`);
+        return;
+      }
+      logger.warn(formatted);
     },
     error(message: string, ...args: unknown[]) {
-      logger.error(formatLogMessage(message, args));
+      const formatted = formatLogMessage(message, args);
+      if (opts?.isShuttingDown?.() && isExpectedShutdownWsLog(formatted)) {
+        logger.debug(`wecom ws shutdown noise suppressed: ${formatted}`);
+        return;
+      }
+      logger.error(formatted);
     },
   };
+}
+
+function isExpectedShutdownWsError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return message.includes("invalid websocket frame") || message.includes("invalid opcode");
 }
 
 function requireActiveClient(accountId: string): WSClient {
@@ -298,6 +323,8 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
 
   conn.promise = new Promise<void>((resolve, reject) => {
     let finished = false;
+    let shuttingDown = false;
+    let shutdownTimer: NodeJS.Timeout | null = null;
 
     const client = new WSClient({
       botId: account.botId ?? "",
@@ -306,20 +333,19 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
       heartbeatInterval: account.heartbeatIntervalMs,
       reconnectInterval: account.reconnectInitialDelayMs,
       maxReconnectAttempts: -1,
-      logger: createSdkLogger(logger),
+      logger: createSdkLogger(logger, { isShuttingDown: () => shuttingDown }),
     });
     conn.client = client;
 
-    const finish = (err?: unknown) => {
+    const cleanup = (err?: unknown) => {
       if (finished) return;
       finished = true;
+      if (shutdownTimer) {
+        clearTimeout(shutdownTimer);
+        shutdownTimer = null;
+      }
       abortSignal?.removeEventListener("abort", onAbort);
       client.removeAllListeners();
-      try {
-        client.disconnect();
-      } catch {
-        // ignore
-      }
       clearWecomWsReplyContextsForAccount(account.accountId);
       clearActivatedTargetsForAccount(account.accountId);
       conn.client = null;
@@ -336,9 +362,31 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
       else resolve();
     };
 
+    const beginShutdown = (err?: unknown) => {
+      if (finished) return;
+      if (shuttingDown) {
+        if (err) {
+          cleanup(err);
+        }
+        return;
+      }
+      shuttingDown = true;
+      abortSignal?.removeEventListener("abort", onAbort);
+      shutdownTimer = setTimeout(() => {
+        logger.warn(`wecom ws shutdown timed out for account ${account.accountId}; forcing cleanup`);
+        cleanup(err);
+      }, WECOM_WS_SHUTDOWN_GRACE_MS);
+      shutdownTimer.unref?.();
+      try {
+        client.disconnect();
+      } catch (disconnectErr) {
+        cleanup(err ?? disconnectErr);
+      }
+    };
+
     const onAbort = () => {
       logger.info("abort signal received, stopping wecom ws gateway");
-      finish();
+      beginShutdown();
     };
 
     const handleMessageCallback = (frame: SdkWsFrame) => {
@@ -596,14 +644,21 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
       setStatus?.({
         accountId: account.accountId,
         mode: "ws",
-        running: true,
+        running: !shuttingDown,
         connectionState: "disconnected",
         lastDisconnectAt: Date.now(),
         lastDisconnectReason: reason,
       });
+      if (shuttingDown) {
+        cleanup();
+      }
     });
 
     client.on("error", (error) => {
+      if (shuttingDown && isExpectedShutdownWsError(error)) {
+        logger.debug(`wecom ws shutdown noise suppressed: ${error.message}`);
+        return;
+      }
       logger.error(`wecom ws sdk error: ${error.message}`);
       setStatus?.({
         accountId: account.accountId,
@@ -614,11 +669,11 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
     });
 
     conn.stop = () => {
-      finish();
+      beginShutdown();
     };
 
     if (abortSignal?.aborted) {
-      finish();
+      beginShutdown();
       return;
     }
 
@@ -627,7 +682,7 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
     try {
       client.connect();
     } catch (err) {
-      finish(err);
+      cleanup(err);
     }
   });
 

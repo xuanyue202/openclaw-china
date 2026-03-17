@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 
 vi.mock("@wecom/aibot-node-sdk", async () => await import("./test-sdk-mock.js"));
 
+import { resetMockSdkBehavior, setMockDisconnectErrorMessage } from "./test-sdk-mock.js";
 import { resolveWecomAccount, type PluginConfig } from "./config.js";
 import { clearWecomRuntime, setWecomRuntime } from "./runtime.js";
 import {
@@ -28,6 +29,7 @@ describe("wecom ws gateway", () => {
   afterEach(() => {
     stopWecomWsGatewayForAccount("default");
     clearWecomRuntime();
+    resetMockSdkBehavior();
   });
 
   it("subscribes, heartbeats, and proactively sends after activation", async () => {
@@ -426,6 +428,90 @@ describe("wecom ws gateway", () => {
 
     controller.abort();
     await expect(gatewayPromise).resolves.toBeUndefined();
+
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  });
+
+  it("suppresses expected shutdown ws errors during abort cleanup", async () => {
+    setMockDisconnectErrorMessage("Invalid WebSocket frame: invalid opcode 3");
+
+    const server = new WebSocketServer({ port: 0 });
+    await once(server, "listening");
+
+    server.on("connection", (socket) => {
+      socket.on("message", (raw) => {
+        const frame = JSON.parse(raw.toString()) as WecomWsFrame;
+        if (!frame.cmd) return;
+        socket.send(
+          JSON.stringify({
+            cmd: frame.cmd,
+            headers: {
+              req_id: frame.headers?.req_id,
+            },
+            errcode: 0,
+          })
+        );
+      });
+    });
+
+    const { port } = server.address() as AddressInfo;
+    const cfg: PluginConfig = {
+      channels: {
+        wecom: {
+          mode: "ws",
+          botId: "bot-1",
+          secret: "secret-1",
+          wsUrl: `ws://127.0.0.1:${port}`,
+          heartbeatIntervalMs: 20,
+          reconnectInitialDelayMs: 10,
+          reconnectMaxDelayMs: 40,
+        },
+      },
+    };
+    const account = resolveWecomAccount({ cfg, accountId: "default" });
+    const statuses: Array<Record<string, unknown>> = [];
+    const errors: string[] = [];
+    const controller = new AbortController();
+
+    const gatewayPromise = startWecomWsGateway({
+      cfg,
+      account,
+      abortSignal: controller.signal,
+      runtime: {
+        log: () => {},
+        error: (message) => {
+          errors.push(message);
+        },
+      },
+      setStatus: (status) => {
+        statuses.push(status);
+      },
+    });
+
+    await waitFor(() => statuses.some((status) => status.connectionState === "ready"));
+
+    controller.abort();
+    await expect(gatewayPromise).resolves.toBeUndefined();
+
+    expect(errors).not.toContain(expect.stringContaining("invalid opcode 3"));
+    expect(
+      statuses.some(
+        (status) =>
+          status.connectionState === "disconnected" &&
+          status.running === false &&
+          typeof status.lastDisconnectAt === "number"
+      )
+    ).toBe(true);
+    expect(
+      statuses.some(
+        (status) => typeof status.lastError === "string" && String(status.lastError).includes("invalid opcode 3")
+      )
+    ).toBe(false);
 
     await new Promise<void>((resolve, reject) => {
       server.close((err) => {
