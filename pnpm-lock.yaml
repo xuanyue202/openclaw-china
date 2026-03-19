@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@openclaw-china/channels':
-        specifier: ^2026.3.9-1
-        version: 2026.3.10(moltbot@0.1.0)
+        specifier: workspace:*
+        version: link:packages/channels
       dingtalk-stream:
         specifier: ^2.1.4
         version: 2.1.4
@@ -62,7 +62,7 @@ importers:
         specifier: ^1.46.0
         version: 1.56.1
       '@openclaw-china/shared':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../packages/shared
       moltbot:
         specifier: '>=0.1.0'
@@ -127,7 +127,7 @@ importers:
   extensions/wecom:
     dependencies:
       '@openclaw-china/shared':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../packages/shared
       '@wecom/aibot-node-sdk':
         specifier: ^1.0.2
@@ -161,7 +161,7 @@ importers:
   extensions/wecom-app:
     dependencies:
       '@openclaw-china/shared':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../packages/shared
       ffmpeg-static:
         specifier: ^5.3.0
@@ -217,25 +217,25 @@ importers:
         specifier: ^1.0.0
         version: 1.0.1
       '@openclaw-china/dingtalk':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../extensions/dingtalk
       '@openclaw-china/feishu-china':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../extensions/feishu
       '@openclaw-china/qqbot':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../extensions/qqbot
       '@openclaw-china/shared':
         specifier: workspace:*
         version: link:../shared
       '@openclaw-china/wecom':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../extensions/wecom
       '@openclaw-china/wecom-app':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../extensions/wecom-app
       '@openclaw-china/wecom-kf':
-        specifier: 2026.3.9-1
+        specifier: workspace:*
         version: link:../../extensions/wecom-kf
       moltbot:
         specifier: '>=0.1.0'
@@ -586,57 +586,6 @@ packages:
   '@larksuiteoapi/node-sdk@1.56.1':
     resolution: {integrity: sha512-/ixtyJnWOmcupKgDXz+6G6qTLMi3cNrR+LGOuq2PMwcJ6hhXTUJNyAF+ADY7ah9OoeDniGU/UJwMb2gqKdxwcA==}
 
-  '@openclaw-china/channels@2026.3.10':
-    resolution: {integrity: sha512-EXwuMvBf+u7KXyHHy3ZaLBGnw9x9LJgHxQ4pP2g7KST22YBGVqPgexbXz96U0upCqHXt6l7tLH7WSoEBKnNlVw==}
-    peerDependencies:
-      moltbot: '>=0.1.0'
-    peerDependenciesMeta:
-      moltbot:
-        optional: true
-
-  '@openclaw-china/dingtalk@2026.3.10':
-    resolution: {integrity: sha512-GMf3JN14aTsNyBC1lPFVanPMVoXCvVQKuL2wFTR2JgILBIWGZVeKkO1Ea4o/KjQbVTq22mVViPp+01TZ3KU88Q==}
-    peerDependencies:
-      moltbot: '>=0.1.0'
-    peerDependenciesMeta:
-      moltbot:
-        optional: true
-
-  '@openclaw-china/feishu-china@2026.3.10':
-    resolution: {integrity: sha512-g8P+3fz+G5HPBvNuRaS9QZP8LBwpIKfKjST2e0s0Q/o5OoitLcZAR0dk1FTBOukxI9xwULxKw1HaH4kWia+yFA==}
-    peerDependencies:
-      moltbot: '>=0.1.0'
-    peerDependenciesMeta:
-      moltbot:
-        optional: true
-
-  '@openclaw-china/qqbot@2026.3.10':
-    resolution: {integrity: sha512-UBqMn9PT1GqiRHL2jhO4dnqoTw3qz9hYU1RUn0BESPbG00hq4AtwJW6G901puc0drjfFPL+/7vcAz73ALySAtg==}
-    peerDependencies:
-      moltbot: '>=0.1.0'
-    peerDependenciesMeta:
-      moltbot:
-        optional: true
-
-  '@openclaw-china/shared@2026.3.10':
-    resolution: {integrity: sha512-WdLqopXqt6RhSxCMqeOaYvbUk5ipEMuWfUdSXbG4f+4kB5tRpkJIviCxyH4TvWGVHQ/rR5/28xohmllkmEPEgg==}
-
-  '@openclaw-china/wecom-app@2026.3.10':
-    resolution: {integrity: sha512-9ScuOPQFEZUCP9kCB3RtsXQ0/t83m9gm04Lpo3eSeoFfZRu1lf7+lSO8WQXOHPWpAEK1yCzE27eOnR6Vsgf8Bg==}
-    peerDependencies:
-      moltbot: '>=0.1.0'
-    peerDependenciesMeta:
-      moltbot:
-        optional: true
-
-  '@openclaw-china/wecom@2026.3.10':
-    resolution: {integrity: sha512-T61vkITH3tJBD+wbYB/e5MXcU8d8Lj+/SuQANISL/BJNxJ45xtvpLi++F5zllpXJqUCdXp93vNEMuxOb8gICiA==}
-    peerDependencies:
-      moltbot: '>=0.1.0'
-    peerDependenciesMeta:
-      moltbot:
-        optional: true
-
   '@oxlint/darwin-arm64@0.16.12':
     resolution: {integrity: sha512-G7phYhlIA4ke2nW7tHLl+E5+rvdzgGA6830D+e+y1RGllT0w2ONGdKcVTj+2pXGCw6yPmCC5fDsDEn2+RPTfxg==}
     cpu: [arm64]
@@ -889,9 +838,6 @@ packages:
 
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
-
-  '@wecom/aibot-node-sdk@1.0.1':
-    resolution: {integrity: sha512-c/sa1IvRKIP+4rZfRV2v70FaXB92+BJIh+vedZkPa8wZ1dwIUyvGg7ydkfYRIwFDzjO9IJZUX5V14EUQYVopAg==}
 
   '@wecom/aibot-node-sdk@1.0.2':
     resolution: {integrity: sha512-azClUIMWWF5vs8K1YWBiNykTFUawej0Z1ooN0ZMGX/PlLB/BK0dQfwbLc1a5Wj3bLRLaFb8HuCTuBrxLnJKJ7g==}
@@ -1677,80 +1623,6 @@ snapshots:
       - debug
       - utf-8-validate
 
-  '@openclaw-china/channels@2026.3.10(moltbot@0.1.0)':
-    dependencies:
-      '@clack/prompts': 1.0.1
-      '@openclaw-china/dingtalk': 2026.3.10(moltbot@0.1.0)
-      '@openclaw-china/feishu-china': 2026.3.10(moltbot@0.1.0)
-      '@openclaw-china/qqbot': 2026.3.10(moltbot@0.1.0)
-      '@openclaw-china/shared': 2026.3.10
-      '@openclaw-china/wecom': 2026.3.10(moltbot@0.1.0)
-      '@openclaw-china/wecom-app': 2026.3.10(moltbot@0.1.0)
-    optionalDependencies:
-      moltbot: 0.1.0
-    transitivePeerDependencies:
-      - bufferutil
-      - debug
-      - supports-color
-      - utf-8-validate
-
-  '@openclaw-china/dingtalk@2026.3.10(moltbot@0.1.0)':
-    dependencies:
-      '@openclaw-china/shared': 2026.3.10
-      dingtalk-stream: 2.1.4
-    optionalDependencies:
-      moltbot: 0.1.0
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@openclaw-china/feishu-china@2026.3.10(moltbot@0.1.0)':
-    dependencies:
-      '@larksuiteoapi/node-sdk': 1.56.1
-      '@openclaw-china/shared': 2026.3.10
-    optionalDependencies:
-      moltbot: 0.1.0
-    transitivePeerDependencies:
-      - bufferutil
-      - debug
-      - utf-8-validate
-
-  '@openclaw-china/qqbot@2026.3.10(moltbot@0.1.0)':
-    dependencies:
-      '@openclaw-china/shared': 2026.3.10
-      ffmpeg-static: 5.3.0
-      silk-wasm: 3.7.1
-      ws: 8.19.0
-    optionalDependencies:
-      moltbot: 0.1.0
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@openclaw-china/shared@2026.3.10':
-    dependencies:
-      '@clack/prompts': 1.0.1
-
-  '@openclaw-china/wecom-app@2026.3.10(moltbot@0.1.0)':
-    dependencies:
-      '@openclaw-china/shared': 2026.3.10
-    optionalDependencies:
-      moltbot: 0.1.0
-
-  '@openclaw-china/wecom@2026.3.10(moltbot@0.1.0)':
-    dependencies:
-      '@openclaw-china/shared': 2026.3.10
-      '@wecom/aibot-node-sdk': 1.0.1
-      ws: 8.19.0
-    optionalDependencies:
-      moltbot: 0.1.0
-    transitivePeerDependencies:
-      - bufferutil
-      - debug
-      - utf-8-validate
-
   '@oxlint/darwin-arm64@0.16.12':
     optional: true
 
@@ -1924,16 +1796,6 @@ snapshots:
       '@vitest/pretty-format': 2.1.9
       loupe: 3.2.1
       tinyrainbow: 1.2.0
-
-  '@wecom/aibot-node-sdk@1.0.1':
-    dependencies:
-      axios: 1.13.4(debug@4.4.3)
-      eventemitter3: 5.0.4
-      ws: 8.19.0
-    transitivePeerDependencies:
-      - bufferutil
-      - debug
-      - utf-8-validate
 
   '@wecom/aibot-node-sdk@1.0.2':
     dependencies:

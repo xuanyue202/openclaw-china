@@ -92,7 +92,7 @@
     "release:major": "npm run build && npm version major && npm publish"
   },
   "dependencies": {
-    "@openclaw-china/shared": "2026.3.9-1",
+    "@openclaw-china/shared": "workspace:*",
     "@larksuiteoapi/node-sdk": "^1.46.0"
   },
   "devDependencies": {
