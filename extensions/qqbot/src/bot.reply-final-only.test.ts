@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "@openclaw-china/shared";
 import {
   appendQQBotBufferedText,
+  combineQQBotBufferedText,
   evaluateReplyFinalOnlyDelivery,
   hasQQBotMarkdownTable,
   isQQBotGroupMessageInterfaceBlocked,
@@ -312,6 +313,26 @@ describe("appendQQBotBufferedText", () => {
   it("ignores repeated excerpts already covered by buffered text", () => {
     const buffered = appendQQBotBufferedText(["第一段\n\n第二段"], "第二段");
     expect(buffered).toEqual(["第一段\n\n第二段"]);
+  });
+});
+
+describe("combineQQBotBufferedText", () => {
+  it("keeps plain buffered paragraphs separated", () => {
+    expect(combineQQBotBufferedText(["第一段", "第二段"])).toBe("第一段\n\n第二段");
+  });
+
+  it("reconstructs table rows continued in a later buffered fragment", () => {
+    const combined = combineQQBotBufferedText([
+      "| 序号 | 公司 | 代表产品 | 一句话 |\n|------|------|----------|--------|\n| 1 | TSMC",
+      "7nm/3nm制程 | 世界的芯片工厂 |\n| 2 | 腾讯 | 微信 | 万物皆可微信 |",
+    ]);
+
+    expect(combined).toBe(
+      "| 序号 | 公司 | 代表产品 | 一句话 |\n" +
+        "|------|------|----------|--------|\n" +
+        "| 1 | TSMC | 7nm/3nm制程 | 世界的芯片工厂 |\n" +
+        "| 2 | 腾讯 | 微信 | 万物皆可微信 |"
+    );
   });
 });
 

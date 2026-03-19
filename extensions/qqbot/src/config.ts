@@ -43,6 +43,7 @@ export type QQBotTypingHeartbeatMode = z.input<typeof QQBotTypingHeartbeatModeSc
 export const DEFAULT_QQBOT_TYPING_HEARTBEAT_MODE = "idle";
 export const DEFAULT_QQBOT_TYPING_HEARTBEAT_INTERVAL_MS = 5000;
 export const DEFAULT_QQBOT_TYPING_INPUT_SECONDS = 60;
+export const DEFAULT_QQBOT_C2C_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT = 1200;
 
 // ── Account-level Schema ──────────────────────────────────────────────────────
 
@@ -63,6 +64,7 @@ const QQBotAccountSchema = z.object({
   markdownSupport: z.boolean().optional().default(true),
   c2cMarkdownDeliveryMode: QQBotC2CMarkdownDeliveryModeSchema,
   c2cMarkdownChunkStrategy: QQBotC2CMarkdownChunkStrategySchema,
+  c2cMarkdownSafeChunkByteLimit: z.number().int().positive().optional(),
   typingHeartbeatMode: QQBotTypingHeartbeatModeSchema,
   typingHeartbeatIntervalMs: z.number().int().positive().optional().default(
     DEFAULT_QQBOT_TYPING_HEARTBEAT_INTERVAL_MS
@@ -136,6 +138,15 @@ export function resolveQQBotAutoSendLocalPathMedia(
   config: QQBotAccountConfig | undefined
 ): boolean {
   return config?.autoSendLocalPathMedia ?? true;
+}
+
+export function resolveQQBotC2CMarkdownSafeChunkByteLimit(
+  config: QQBotAccountConfig | undefined
+): number | undefined {
+  const value = config?.c2cMarkdownSafeChunkByteLimit;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 export function resolveQQBotTypingHeartbeatMode(

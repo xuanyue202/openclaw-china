@@ -23,11 +23,13 @@ import {
   transcribeTencentFlash,
 } from "@openclaw-china/shared";
 import {
+  DEFAULT_QQBOT_C2C_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
   resolveQQBotASRCredentials,
   resolveInboundMediaDir,
   resolveInboundMediaKeepDays,
   resolveInboundMediaTempDir,
   resolveQQBotAutoSendLocalPathMedia,
+  resolveQQBotC2CMarkdownSafeChunkByteLimit,
   resolveQQBotTypingHeartbeatIntervalMs,
   resolveQQBotTypingHeartbeatMode,
   resolveQQBotTypingInputSeconds,
@@ -1283,7 +1285,7 @@ function extractLocalMediaFromText(params: {
   const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\(([^)]+)\)/g;
   const MARKDOWN_LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
   const BARE_LOCAL_MEDIA_PATH_RE =
-    /`?((?:\/(?:tmp|var|private|Users|home|root)\/[^\s`'",)]+|[A-Za-z]:[\\/][^\s`'",)]+)\.(?:png|jpg|jpeg|gif|bmp|webp|svg|ico|mp3|wav|ogg|m4a|amr|flac|aac|wma|mp4|mov|avi|mkv|webm|flv|wmv|m4v))`?/gi;
+    /`?((?:\/(?:tmp|var|private|Users|home|root)\/[^\s`'",)]+|\/mnt\/[A-Za-z]\/[^\s`'",)]+|[A-Za-z]:[\\/][^\s`'",)]+)\.(?:png|jpg|jpeg|gif|bmp|webp|svg|ico|mp3|wav|ogg|m4a|amr|flac|aac|wma|mp4|mov|avi|mkv|webm|flv|wmv|m4v))`?/gi;
 
   const collectLocalRichMedia = (
     rawValue: string,
@@ -1422,6 +1424,10 @@ const MARKDOWN_INLINE_STRUCTURE_RE = /(?:\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|~
 const MARKDOWN_BOUNDARY_GUARD_RE = /[`*_~|]/;
 const EXPLICIT_MARKDOWN_FENCE_RE = /(^|\n)(`{3,}|~{3,})\s*(?:markdown|md)\s*\n([\s\S]*?)\n\2(?=\n|$)/gi;
 const GENERIC_MARKDOWN_FENCE_RE = /(^|\n)(`{3,}|~{3,})\s*\n([\s\S]*?)\n\2(?=\n|$)/g;
+const QQBOT_MARKDOWN_SOFT_LIMIT_THRESHOLD = 128;
+const QQBOT_MARKDOWN_SOFT_LIMIT_HEADROOM_MIN = 16;
+const QQBOT_MARKDOWN_SOFT_LIMIT_HEADROOM_MAX = 320;
+const QQBOT_MARKDOWN_SOFT_LIMIT_HEADROOM_RATIO = 0.18;
 
 type QQBotMarkdownBlockKind =
   | "heading"
@@ -1635,6 +1641,100 @@ export function appendQQBotBufferedText(bufferedTexts: string[], nextText: strin
   }
 
   return [...bufferedTexts, normalized];
+}
+
+function resolveQQBotLastNonEmptyLine(text: string): string | undefined {
+  return text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .reverse()
+    .find((line) => line.trim().length > 0);
+}
+
+function resolveQQBotFirstNonEmptyLine(text: string): string | undefined {
+  return text
+    .split("\n")
+    .map((line) => line.trimStart())
+    .find((line) => line.trim().length > 0);
+}
+
+function resolveQQBotTrailingMarkdownTableColumnCount(text: string): number | undefined {
+  const lines = text.split("\n");
+  for (let index = Math.max(0, lines.length - 2); index >= 0; index -= 1) {
+    if (!isQQBotMarkdownTableStart(lines, index)) {
+      continue;
+    }
+
+    const trailingLines = lines.slice(index + 2).filter((line) => line.trim().length > 0);
+    if (trailingLines.length === 0 || trailingLines.every((line) => line.includes("|"))) {
+      return parseQQBotMarkdownTableRowCells(lines[index] ?? "").length;
+    }
+  }
+
+  return undefined;
+}
+
+function mergeQQBotBufferedTextSegments(current: string, next: string): string {
+  const currentTrimmed = current.trimEnd();
+  const nextTrimmed = next.trimStart();
+  if (!currentTrimmed) return nextTrimmed;
+  if (!nextTrimmed) return currentTrimmed;
+  if (currentTrimmed === nextTrimmed || currentTrimmed.includes(nextTrimmed)) {
+    return currentTrimmed;
+  }
+  if (nextTrimmed.includes(currentTrimmed)) {
+    return nextTrimmed;
+  }
+
+  const lastLine = resolveQQBotLastNonEmptyLine(currentTrimmed) ?? "";
+  const firstLine = resolveQQBotFirstNonEmptyLine(nextTrimmed) ?? "";
+  const trailingTableColumnCount = resolveQQBotTrailingMarkdownTableColumnCount(currentTrimmed);
+  const lastLineLooksLikeTable = lastLine.includes("|");
+  const firstLineLooksLikeTable = firstLine.startsWith("|");
+  const firstLineContainsTableCell = firstLine.includes("|");
+  const expectedPipeCount =
+    typeof trailingTableColumnCount === "number" && trailingTableColumnCount > 0
+      ? trailingTableColumnCount + 1
+      : undefined;
+  const lastLinePipeCount = (lastLine.match(/\|/g) ?? []).length;
+  const firstLinePipeCount = (firstLine.match(/\|/g) ?? []).length;
+  const sameRowJoiner =
+    typeof expectedPipeCount === "number" &&
+    lastLinePipeCount + firstLinePipeCount < expectedPipeCount
+      ? " | "
+      : " ";
+  const lastLineEndsInsideTableRow = Boolean(
+    trailingTableColumnCount &&
+      lastLineLooksLikeTable &&
+      (!lastLine.trimEnd().endsWith("|") ||
+        (typeof expectedPipeCount === "number" && lastLinePipeCount < expectedPipeCount))
+  );
+
+  if (lastLineEndsInsideTableRow && nextTrimmed.includes("|")) {
+    return `${currentTrimmed}${sameRowJoiner}${nextTrimmed}`;
+  }
+
+  if (firstLineLooksLikeTable) {
+    if (lastLineLooksLikeTable || hasQQBotMarkdownTable(currentTrimmed)) {
+      return `${currentTrimmed}\n${nextTrimmed}`;
+    }
+  }
+
+  if (trailingTableColumnCount && firstLineContainsTableCell) {
+    return `${currentTrimmed}${sameRowJoiner}${nextTrimmed}`;
+  }
+
+  return joinQQBotMarkdownPieces([currentTrimmed, nextTrimmed]);
+}
+
+export function combineQQBotBufferedText(bufferedTexts: string[]): string {
+  return bufferedTexts.reduce((combined, segment) => {
+    const normalized = segment.trim();
+    if (!normalized) {
+      return combined;
+    }
+    return mergeQQBotBufferedTextSegments(combined, normalized);
+  }, "");
 }
 
 export function normalizeQQBotRenderedMarkdown(text: string): string {
@@ -1924,6 +2024,30 @@ function hasQQBotBoundaryGuard(text: string): boolean {
   return MARKDOWN_BOUNDARY_GUARD_RE.test(text);
 }
 
+function measureQQBotUtf8Length(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+function findQQBotIndexWithinUtf8Limit(text: string, limit: number): number {
+  if (limit <= 0 || !text) {
+    return 0;
+  }
+
+  let totalBytes = 0;
+  let index = 0;
+
+  for (const char of text) {
+    const charBytes = measureQQBotUtf8Length(char);
+    if (totalBytes + charBytes > limit) {
+      break;
+    }
+    totalBytes += charBytes;
+    index += char.length;
+  }
+
+  return index;
+}
+
 function isQQBotSafeMarkdownBoundary(text: string, index: number): boolean {
   const left = text.slice(Math.max(0, index - 3), index).replace(/\s+/g, "");
   const right = text.slice(index, Math.min(text.length, index + 3)).replace(/\s+/g, "");
@@ -1933,14 +2057,19 @@ function isQQBotSafeMarkdownBoundary(text: string, index: number): boolean {
 }
 
 function findQQBotRegexBoundary(text: string, limit: number, pattern: RegExp): number | undefined {
-  const scopedText = text.slice(0, Math.min(limit + 1, text.length));
+  const scopedIndex = findQQBotIndexWithinUtf8Limit(text, limit);
+  const scopedText = text.slice(0, scopedIndex);
   const regex = new RegExp(pattern.source, pattern.flags);
   let match = regex.exec(scopedText);
   let lastBoundary: number | undefined;
 
   while (match) {
     const boundary = match.index + match[0].length;
-    if (boundary > 0 && boundary <= limit && isQQBotSafeMarkdownBoundary(text, boundary)) {
+    if (
+      boundary > 0 &&
+      measureQQBotUtf8Length(text.slice(0, boundary)) <= limit &&
+      isQQBotSafeMarkdownBoundary(text, boundary)
+    ) {
       lastBoundary = boundary;
     }
     match = regex.exec(scopedText);
@@ -1950,13 +2079,14 @@ function findQQBotRegexBoundary(text: string, limit: number, pattern: RegExp): n
 }
 
 function findQQBotFallbackBoundary(text: string, limit: number): number {
-  const minIndex = Math.max(1, limit - 120);
-  for (let index = limit; index >= minIndex; index -= 1) {
+  const maxIndex = findQQBotIndexWithinUtf8Limit(text, limit);
+  const minIndex = Math.max(1, maxIndex - 120);
+  for (let index = maxIndex; index >= minIndex; index -= 1) {
     if (isQQBotSafeMarkdownBoundary(text, index)) {
       return index;
     }
   }
-  return limit;
+  return maxIndex;
 }
 
 function findQQBotSafeSplitIndex(text: string, limit: number): number {
@@ -1979,15 +2109,16 @@ function findQQBotSafeSplitIndex(text: string, limit: number): number {
 }
 
 function splitQQBotHardText(text: string, limit: number): string[] {
-  if (limit <= 0 || text.length <= limit) {
+  if (limit <= 0 || measureQQBotUtf8Length(text) <= limit) {
     return [text];
   }
 
   const chunks: string[] = [];
   let remaining = text;
-  while (remaining.length > limit) {
-    chunks.push(remaining.slice(0, limit));
-    remaining = remaining.slice(limit);
+  while (measureQQBotUtf8Length(remaining) > limit) {
+    const nextIndex = Math.max(1, findQQBotIndexWithinUtf8Limit(remaining, limit));
+    chunks.push(remaining.slice(0, nextIndex));
+    remaining = remaining.slice(nextIndex);
   }
   if (remaining) {
     chunks.push(remaining);
@@ -2000,7 +2131,7 @@ function splitQQBotTextSafely(
   limit: number,
   options?: { trimLeading?: boolean; trimTrailing?: boolean }
 ): string[] {
-  if (limit <= 0 || text.length <= limit) {
+  if (limit <= 0 || measureQQBotUtf8Length(text) <= limit) {
     return [text];
   }
 
@@ -2009,7 +2140,7 @@ function splitQQBotTextSafely(
   const chunks: string[] = [];
   let remaining = text;
 
-  while (remaining.length > limit) {
+  while (measureQQBotUtf8Length(remaining) > limit) {
     const splitIndex = findQQBotSafeSplitIndex(remaining, limit);
     let nextChunk = remaining.slice(0, splitIndex);
     let nextRemaining = remaining.slice(splitIndex);
@@ -2022,7 +2153,8 @@ function splitQQBotTextSafely(
     }
 
     if (!nextChunk) {
-      const hardChunk = remaining.slice(0, limit);
+      const hardChunkIndex = Math.max(1, findQQBotIndexWithinUtf8Limit(remaining, limit));
+      const hardChunk = remaining.slice(0, hardChunkIndex);
       chunks.push(hardChunk);
       remaining = remaining.slice(hardChunk.length);
       continue;
@@ -2041,7 +2173,7 @@ function splitQQBotTextSafely(
 }
 
 function splitQQBotMarkdownLineBlock(text: string, limit: number): string[] {
-  if (limit <= 0 || text.length <= limit) {
+  if (limit <= 0 || measureQQBotUtf8Length(text) <= limit) {
     return [text];
   }
 
@@ -2062,13 +2194,13 @@ function splitQQBotMarkdownLineBlock(text: string, limit: number): string[] {
 
   for (const line of lines) {
     const candidate = currentLines.length > 0 ? `${currentLines.join("\n")}\n${line}` : line;
-    if (candidate.length <= limit) {
+    if (measureQQBotUtf8Length(candidate) <= limit) {
       currentLines.push(line);
       continue;
     }
 
     flushCurrent();
-    if (line.length <= limit) {
+    if (measureQQBotUtf8Length(line) <= limit) {
       currentLines.push(line);
       continue;
     }
@@ -2087,8 +2219,142 @@ function splitQQBotMarkdownLineBlock(text: string, limit: number): string[] {
   return chunks;
 }
 
+function parseQQBotMarkdownTableRowCells(row: string, columnCount?: number): string[] {
+  const trimmed = row.trim();
+  const inner = trimmed.replace(/^\|\s*/, "").replace(/\s*\|$/, "");
+  const cells = inner.split("|").map((cell) => cell.trim());
+
+  if (typeof columnCount !== "number" || !Number.isFinite(columnCount) || columnCount <= 0) {
+    return cells;
+  }
+
+  if (cells.length >= columnCount) {
+    return cells.slice(0, columnCount);
+  }
+
+  return [...cells, ...Array.from({ length: columnCount - cells.length }, () => "")];
+}
+
+function renderQQBotMarkdownTableRow(cells: string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
+function splitQQBotMarkdownTableRowByCells(params: {
+  row: string;
+  columnCount: number;
+  limit: number;
+  anchorColumnCount?: number;
+}): string[] {
+  const { row, columnCount, limit } = params;
+  const normalizedCells = parseQQBotMarkdownTableRowCells(row, columnCount);
+  const normalizedRow = renderQQBotMarkdownTableRow(normalizedCells);
+  if (measureQQBotUtf8Length(normalizedRow) <= limit) {
+    return [normalizedRow];
+  }
+
+  const anchorColumnCount = Math.min(
+    Math.max(1, params.anchorColumnCount ?? 2),
+    columnCount
+  );
+  const anchorCells = normalizedCells.map((cell, index) =>
+    index < anchorColumnCount ? cell : ""
+  );
+  const chunks: string[] = [];
+  let currentCells = [...anchorCells];
+  let hasContent = false;
+
+  const flushCurrent = (): void => {
+    if (!hasContent) {
+      return;
+    }
+    chunks.push(renderQQBotMarkdownTableRow(currentCells));
+    currentCells = [...anchorCells];
+    hasContent = false;
+  };
+
+  for (let index = anchorColumnCount; index < columnCount; index += 1) {
+    const cell = normalizedCells[index] ?? "";
+    if (!cell) {
+      continue;
+    }
+
+    const candidateCells = [...currentCells];
+    candidateCells[index] = cell;
+    if (measureQQBotUtf8Length(renderQQBotMarkdownTableRow(candidateCells)) <= limit) {
+      currentCells[index] = cell;
+      hasContent = true;
+      continue;
+    }
+
+    if (hasContent) {
+      flushCurrent();
+      const nextCandidateCells = [...currentCells];
+      nextCandidateCells[index] = cell;
+      if (measureQQBotUtf8Length(renderQQBotMarkdownTableRow(nextCandidateCells)) <= limit) {
+        currentCells[index] = cell;
+        hasContent = true;
+        continue;
+      }
+    }
+
+    const emptyRowBytes = measureQQBotUtf8Length(renderQQBotMarkdownTableRow(currentCells));
+    const availableCellBytes = Math.max(1, limit - emptyRowBytes);
+    for (const cellPiece of splitQQBotTextSafely(cell, availableCellBytes, {
+      trimLeading: false,
+      trimTrailing: false,
+    })) {
+      const pieceCells = [...anchorCells];
+      pieceCells[index] = cellPiece;
+      chunks.push(renderQQBotMarkdownTableRow(pieceCells));
+    }
+    currentCells = [...anchorCells];
+    hasContent = false;
+  }
+
+  flushCurrent();
+  return chunks.length > 0 ? chunks : splitQQBotTextSafely(normalizedRow, limit);
+}
+
+function resolveQQBotMarkdownTableBlockLimit(params: {
+  header: string;
+  separator: string;
+  rows: string[];
+  limit: number;
+}): number {
+  const { header, separator, rows, limit } = params;
+  if (limit <= 512) {
+    return limit;
+  }
+
+  const columnCount = parseQQBotMarkdownTableRowCells(header).length;
+  if (columnCount < 8) {
+    return limit;
+  }
+
+  const tablePrefixBytes = measureQQBotUtf8Length(`${header}\n${separator}`);
+  const extraColumnCount = Math.max(0, columnCount - 7);
+  const columnPenalty = Math.min(240, extraColumnCount * 55);
+  const headerPenalty = Math.min(120, Math.floor(tablePrefixBytes * 0.25));
+  const reducedLimit = limit - columnPenalty - headerPenalty;
+  const minTableLimit = Math.max(tablePrefixBytes + 64, Math.floor(limit * 0.45));
+  const maxSingleRowRequirement = Math.min(
+    limit,
+    rows.reduce((max, row) => {
+      const normalizedRow = renderQQBotMarkdownTableRow(
+        parseQQBotMarkdownTableRowCells(row, columnCount)
+      );
+      return Math.max(max, measureQQBotUtf8Length(`${header}\n${separator}\n${normalizedRow}`));
+    }, tablePrefixBytes)
+  );
+
+  return Math.min(
+    limit,
+    Math.max(maxSingleRowRequirement, minTableLimit, Math.min(limit, reducedLimit))
+  );
+}
+
 function splitQQBotMarkdownTableBlock(text: string, limit: number): string[] {
-  if (limit <= 0 || text.length <= limit) {
+  if (limit <= 0 || measureQQBotUtf8Length(text) <= limit) {
     return [text];
   }
 
@@ -2096,7 +2362,14 @@ function splitQQBotMarkdownTableBlock(text: string, limit: number): string[] {
   const header = lines[0] ?? "";
   const separator = lines[1] ?? "";
   const rows = lines.slice(2);
+  const packingLimit = resolveQQBotMarkdownTableBlockLimit({
+    header,
+    separator,
+    rows,
+    limit,
+  });
   const tablePrefix = `${header}\n${separator}`;
+  const columnCount = parseQQBotMarkdownTableRowCells(header).length;
   const chunks: string[] = [];
   let currentRows: string[] = [];
 
@@ -2113,21 +2386,22 @@ function splitQQBotMarkdownTableBlock(text: string, limit: number): string[] {
       currentRows.length > 0
         ? `${tablePrefix}\n${currentRows.join("\n")}\n${row}`
         : `${tablePrefix}\n${row}`;
-    if (candidate.length <= limit) {
+    if (measureQQBotUtf8Length(candidate) <= packingLimit) {
       currentRows.push(row);
       continue;
     }
 
     flushCurrent();
-    if (`${tablePrefix}\n${row}`.length <= limit) {
+    if (measureQQBotUtf8Length(`${tablePrefix}\n${row}`) <= limit) {
       currentRows.push(row);
       continue;
     }
 
-    const maxRowLength = Math.max(16, limit - tablePrefix.length - 1);
-    for (const rowPiece of splitQQBotTextSafely(row, maxRowLength, {
-      trimLeading: false,
-      trimTrailing: false,
+    const maxRowLength = Math.max(16, limit - measureQQBotUtf8Length(tablePrefix) - 1);
+    for (const rowPiece of splitQQBotMarkdownTableRowByCells({
+      row,
+      columnCount,
+      limit: maxRowLength,
     })) {
       chunks.push(`${tablePrefix}\n${rowPiece}`);
     }
@@ -2138,7 +2412,7 @@ function splitQQBotMarkdownTableBlock(text: string, limit: number): string[] {
 }
 
 function splitQQBotMarkdownCodeFence(text: string, limit: number): string[] {
-  if (limit <= 0 || text.length <= limit) {
+  if (limit <= 0 || measureQQBotUtf8Length(text) <= limit) {
     return [text];
   }
 
@@ -2149,7 +2423,8 @@ function splitQQBotMarkdownCodeFence(text: string, limit: number): string[] {
     lines.length > 1 && isQQBotFenceClosingLine(lines[lines.length - 1] ?? "", delimiter);
   const closingLine = hasClosingFence ? lines[lines.length - 1] ?? delimiter : delimiter;
   const codeLines = lines.slice(1, hasClosingFence ? -1 : lines.length);
-  const fixedOverhead = openingLine.length + closingLine.length + 2;
+  const fixedOverhead =
+    measureQQBotUtf8Length(openingLine) + measureQQBotUtf8Length(closingLine) + 2;
   const availableLineLength = Math.max(1, limit - fixedOverhead);
   const chunks: string[] = [];
   let currentCodeLines: string[] = [];
@@ -2167,13 +2442,13 @@ function splitQQBotMarkdownCodeFence(text: string, limit: number): string[] {
       currentCodeLines.length > 0
         ? `${openingLine}\n${currentCodeLines.join("\n")}\n${codeLine}\n${closingLine}`
         : `${openingLine}\n${codeLine}\n${closingLine}`;
-    if (candidate.length <= limit) {
+    if (measureQQBotUtf8Length(candidate) <= limit) {
       currentCodeLines.push(codeLine);
       continue;
     }
 
     flushCurrent();
-    if (`${openingLine}\n${codeLine}\n${closingLine}`.length <= limit) {
+    if (measureQQBotUtf8Length(`${openingLine}\n${codeLine}\n${closingLine}`) <= limit) {
       currentCodeLines.push(codeLine);
       continue;
     }
@@ -2188,7 +2463,7 @@ function splitQQBotMarkdownCodeFence(text: string, limit: number): string[] {
 }
 
 function splitQQBotMarkdownBlock(block: QQBotMarkdownBlock, limit: number): string[] {
-  if (limit <= 0 || block.text.length <= limit) {
+  if (limit <= 0 || measureQQBotUtf8Length(block.text) <= limit) {
     return [block.text];
   }
 
@@ -2211,12 +2486,135 @@ function splitQQBotMarkdownBlock(block: QQBotMarkdownBlock, limit: number): stri
   }
 }
 
-function chunkQQBotStructuredMarkdown(text: string, limit: number): string[] {
+function resolveQQBotStructuredMarkdownSoftLimit(
+  limit: number,
+  safeChunkByteLimit?: number
+): number {
+  if (limit <= QQBOT_MARKDOWN_SOFT_LIMIT_THRESHOLD) {
+    return limit;
+  }
+
+  const configuredSafeLimit =
+    typeof safeChunkByteLimit === "number" && Number.isFinite(safeChunkByteLimit) && safeChunkByteLimit > 0
+      ? Math.floor(safeChunkByteLimit)
+      : undefined;
+  if (configuredSafeLimit) {
+    return Math.min(limit, configuredSafeLimit);
+  }
+
+  const reservedLength = Math.min(
+    QQBOT_MARKDOWN_SOFT_LIMIT_HEADROOM_MAX,
+    Math.max(
+      QQBOT_MARKDOWN_SOFT_LIMIT_HEADROOM_MIN,
+      Math.floor(limit * QQBOT_MARKDOWN_SOFT_LIMIT_HEADROOM_RATIO)
+    )
+  );
+  const softLimit = limit - reservedLength;
+  const boundedSoftLimit = Math.min(
+    softLimit > 0 ? softLimit : limit,
+    DEFAULT_QQBOT_C2C_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT
+  );
+  return boundedSoftLimit > 0 ? boundedSoftLimit : limit;
+}
+
+function maybePrefixQQBotContinuationPiece(params: {
+  prefix?: string;
+  piece: string;
+  limit: number;
+}): string {
+  const prefix = params.prefix?.trim();
+  if (!prefix) {
+    return params.piece;
+  }
+
+  const prefixedPiece = joinQQBotMarkdownPieces([prefix, params.piece]);
+  return measureQQBotUtf8Length(prefixedPiece) <= params.limit ? prefixedPiece : params.piece;
+}
+
+function resolveQQBotMarkdownLeadPiece(
+  blocks: QQBotMarkdownBlock[],
+  index: number,
+  limit: number
+): string | undefined {
+  const block = blocks[index];
+  if (!block) {
+    return undefined;
+  }
+
+  if (block.kind === "heading") {
+    const nextBlock = blocks[index + 1];
+    if (nextBlock && nextBlock.kind !== "thematic-break") {
+      const nextPieces = splitQQBotMarkdownBlock(nextBlock, limit);
+      const firstBodyPiece = nextPieces[0];
+      if (firstBodyPiece) {
+        const pairedText = joinQQBotMarkdownPieces([block.text, firstBodyPiece]);
+        if (measureQQBotUtf8Length(pairedText) <= limit) {
+          return pairedText;
+        }
+      }
+    }
+  }
+
+  return splitQQBotMarkdownBlock(block, limit)
+    .map((piece) => piece.trim())
+    .find(Boolean);
+}
+
+function shouldQQBotCarryThematicBreakToNextBlock(params: {
+  blocks: QQBotMarkdownBlock[];
+  index: number;
+  currentPieces: string[];
+  limit: number;
+}): boolean {
+  const block = params.blocks[params.index];
+  if (!block || block.kind !== "thematic-break") {
+    return false;
+  }
+
+  if (params.currentPieces.length === 0) {
+    return true;
+  }
+
+  const withBreak = joinQQBotMarkdownPieces([...params.currentPieces, block.text]);
+  if (measureQQBotUtf8Length(withBreak) > params.limit) {
+    return true;
+  }
+
+  const nextLeadPiece = resolveQQBotMarkdownLeadPiece(
+    params.blocks,
+    params.index + 1,
+    params.limit
+  );
+  if (!nextLeadPiece) {
+    return false;
+  }
+
+  const prefixedLeadPiece = joinQQBotMarkdownPieces([block.text, nextLeadPiece]);
+  if (measureQQBotUtf8Length(prefixedLeadPiece) > params.limit) {
+    return false;
+  }
+
+  const sectionCandidate = joinQQBotMarkdownPieces([
+    ...params.currentPieces,
+    block.text,
+    nextLeadPiece,
+  ]);
+  return measureQQBotUtf8Length(sectionCandidate) > params.limit;
+}
+
+function chunkQQBotStructuredMarkdown(
+  text: string,
+  limit: number,
+  safeChunkByteLimit?: number
+): string[] {
   const blocks = parseQQBotMarkdownBlocks(text);
   if (blocks.length === 0 || limit <= 0) {
     return [text.trim()];
   }
 
+  // Keep a small buffer below the transport limit so structured markdown can
+  // break on stable boundaries before QQ's rendered payload hits the ceiling.
+  const chunkLimit = resolveQQBotStructuredMarkdownSoftLimit(limit, safeChunkByteLimit);
   const chunks: string[] = [];
   let currentPieces: string[] = [];
   let pendingPrefixPieces: string[] = [];
@@ -2236,14 +2634,20 @@ function chunkQQBotStructuredMarkdown(text: string, limit: number): string[] {
     if (!piece) {
       return;
     }
-    const pieces = piece.length > limit ? splitQQBotTextSafely(piece, limit) : [piece];
+    const pieces =
+      measureQQBotUtf8Length(piece) > chunkLimit
+        ? splitQQBotTextSafely(piece, chunkLimit)
+        : [piece];
     for (const nextPiece of pieces) {
       const normalizedPiece = nextPiece.trim();
       if (!normalizedPiece) {
         continue;
       }
       const candidate = joinQQBotMarkdownPieces([...currentPieces, normalizedPiece]);
-      if (currentPieces.length === 0 || candidate.length <= limit) {
+      if (
+        currentPieces.length === 0 ||
+        measureQQBotUtf8Length(candidate) <= chunkLimit
+      ) {
         currentPieces.push(normalizedPiece);
         continue;
       }
@@ -2268,9 +2672,22 @@ function chunkQQBotStructuredMarkdown(text: string, limit: number): string[] {
     }
 
     if (block.kind === "thematic-break") {
+      if (
+        shouldQQBotCarryThematicBreakToNextBlock({
+          blocks,
+          index,
+          currentPieces,
+          limit: chunkLimit,
+        })
+      ) {
+        flushCurrent();
+        pendingPrefixPieces.push(block.text);
+        continue;
+      }
+
       if (currentPieces.length > 0) {
         const candidate = joinQQBotMarkdownPieces([...currentPieces, block.text]);
-        if (candidate.length <= limit) {
+        if (measureQQBotUtf8Length(candidate) <= chunkLimit) {
           currentPieces.push(block.text);
           continue;
         }
@@ -2284,7 +2701,7 @@ function chunkQQBotStructuredMarkdown(text: string, limit: number): string[] {
       const headingText = consumePendingPrefix(block.text);
       const nextBlock = blocks[index + 1];
       if (nextBlock && nextBlock.kind !== "thematic-break") {
-        const nextPieces = splitQQBotMarkdownBlock(nextBlock, limit);
+        const nextPieces = splitQQBotMarkdownBlock(nextBlock, chunkLimit);
         const firstBodyPiece = nextPieces[0];
         if (firstBodyPiece) {
           const pairedText = joinQQBotMarkdownPieces([headingText, firstBodyPiece]);
@@ -2294,21 +2711,43 @@ function chunkQQBotStructuredMarkdown(text: string, limit: number): string[] {
             firstBodyPiece,
           ]);
           if (
-            pairedText.length <= limit &&
-            (currentPieces.length === 0 || pairedCandidate.length <= limit)
+            measureQQBotUtf8Length(pairedText) <= chunkLimit &&
+            (currentPieces.length === 0 ||
+              measureQQBotUtf8Length(pairedCandidate) <= chunkLimit)
           ) {
             currentPieces.push(headingText, firstBodyPiece);
             for (let pieceIndex = 1; pieceIndex < nextPieces.length; pieceIndex += 1) {
-              appendPiece(nextPieces[pieceIndex] ?? "");
+              const nextPiece = nextPieces[pieceIndex] ?? "";
+              appendPiece(
+                nextBlock.kind === "table"
+                  ? maybePrefixQQBotContinuationPiece({
+                      prefix: headingText,
+                      piece: nextPiece,
+                      limit: chunkLimit,
+                    })
+                  : nextPiece
+              );
             }
             index += 1;
             continue;
           }
-          if (currentPieces.length > 0 && pairedText.length <= limit) {
+          if (
+            currentPieces.length > 0 &&
+            measureQQBotUtf8Length(pairedText) <= chunkLimit
+          ) {
             flushCurrent();
             currentPieces.push(headingText, firstBodyPiece);
             for (let pieceIndex = 1; pieceIndex < nextPieces.length; pieceIndex += 1) {
-              appendPiece(nextPieces[pieceIndex] ?? "");
+              const nextPiece = nextPieces[pieceIndex] ?? "";
+              appendPiece(
+                nextBlock.kind === "table"
+                  ? maybePrefixQQBotContinuationPiece({
+                      prefix: headingText,
+                      piece: nextPiece,
+                      limit: chunkLimit,
+                    })
+                  : nextPiece
+              );
             }
             index += 1;
             continue;
@@ -2321,16 +2760,31 @@ function chunkQQBotStructuredMarkdown(text: string, limit: number): string[] {
     }
 
     const blockText = consumePendingPrefix(block.text);
-    for (const piece of splitQQBotMarkdownBlock({ ...block, text: blockText }, limit)) {
+    for (const piece of splitQQBotMarkdownBlock({ ...block, text: blockText }, chunkLimit)) {
       appendPiece(piece);
     }
   }
 
   if (pendingPrefixPieces.length > 0 && currentPieces.length > 0) {
     const trailingCandidate = joinQQBotMarkdownPieces([...currentPieces, ...pendingPrefixPieces]);
-    if (trailingCandidate.length <= limit) {
+    if (measureQQBotUtf8Length(trailingCandidate) <= chunkLimit) {
       currentPieces.push(...pendingPrefixPieces);
+      pendingPrefixPieces = [];
     }
+  }
+
+  if (pendingPrefixPieces.length > 0 && chunks.length > 0) {
+    const trailingPrefix = joinQQBotMarkdownPieces(pendingPrefixPieces);
+    const lastChunk = chunks[chunks.length - 1] ?? "";
+    const trailingCandidate = joinQQBotMarkdownPieces([lastChunk, trailingPrefix]);
+    if (measureQQBotUtf8Length(trailingCandidate) <= chunkLimit) {
+      chunks[chunks.length - 1] = trailingCandidate;
+      pendingPrefixPieces = [];
+    }
+  }
+
+  if (pendingPrefixPieces.length > 0) {
+    currentPieces.push(joinQQBotMarkdownPieces(pendingPrefixPieces));
   }
 
   flushCurrent();
@@ -2363,6 +2817,7 @@ export function chunkC2CMarkdownText(params: {
   text: string;
   limit: number;
   strategy?: QQBotC2CMarkdownChunkStrategy;
+  safeChunkByteLimit?: number;
   fallbackChunkText?: (text: string) => string[];
 }): string[] {
   const normalized = params.text.trim();
@@ -2379,7 +2834,7 @@ export function chunkC2CMarkdownText(params: {
     return params.fallbackChunkText ? params.fallbackChunkText(normalized) : [normalized];
   }
 
-  return chunkQQBotStructuredMarkdown(normalized, params.limit);
+  return chunkQQBotStructuredMarkdown(normalized, params.limit, params.safeChunkByteLimit);
 }
 
 export async function sendQQBotMediaWithFallback(params: {
@@ -2847,6 +3302,7 @@ async function dispatchToAgent(params: {
     const markdownSupport = qqCfg.markdownSupport ?? true;
     const c2cMarkdownDeliveryMode = qqCfg.c2cMarkdownDeliveryMode ?? "proactive-table-only";
     const c2cMarkdownChunkStrategy = qqCfg.c2cMarkdownChunkStrategy ?? "markdown-block";
+    const c2cMarkdownSafeChunkByteLimit = resolveQQBotC2CMarkdownSafeChunkByteLimit(qqCfg);
     const isC2CTarget = isQQBotC2CTarget(target.to);
     const useC2CMarkdownTransport = markdownSupport && isC2CTarget;
     let bufferedC2CMarkdownTexts: string[] = [];
@@ -2893,6 +3349,7 @@ async function dispatchToAgent(params: {
             text: finalMarkdownText,
             limit,
             strategy: c2cMarkdownChunkStrategy,
+            safeChunkByteLimit: c2cMarkdownSafeChunkByteLimit,
             fallbackChunkText: chunkText,
           })
         : [];
@@ -2903,7 +3360,7 @@ async function dispatchToAgent(params: {
         `delivery=${deliveryLabel} to=${target.to} chunks=${textChunks.length} media=${mediaQueue.length} ` +
           `replyToId=${textReplyRefs.replyToId ? "yes" : "no"} replyEventId=${textReplyRefs.replyEventId ? "yes" : "no"} ` +
           `phase=${params.phase} tableMode=${String(resolvedTableMode)} chunkMode=${String(chunkMode ?? "default")} ` +
-          `chunkStrategy=${c2cMarkdownChunkStrategy}`
+          `chunkStrategy=${c2cMarkdownChunkStrategy} safeChunkByteLimit=${String(c2cMarkdownSafeChunkByteLimit ?? "auto")}`
       );
 
       if (!shouldSuppressVisibleReplies()) {
@@ -2978,7 +3435,7 @@ async function dispatchToAgent(params: {
         return;
       }
 
-      const combinedText = bufferedC2CMarkdownTexts.join("\n\n").trim();
+      const combinedText = combineQQBotBufferedText(bufferedC2CMarkdownTexts);
       const combinedMediaUrls = [...bufferedC2CMarkdownMediaUrls];
       bufferedC2CMarkdownTexts = [];
       bufferedC2CMarkdownMediaUrls = [];
@@ -3042,7 +3499,7 @@ async function dispatchToAgent(params: {
           !replyFinalOnly &&
           c2cMarkdownChunkStrategy === "markdown-block" &&
           info?.kind !== "tool" &&
-          looksLikeStructuredMarkdown(textToSend);
+          (hasBufferedC2CMarkdownReply() || looksLikeStructuredMarkdown(textToSend));
 
         if (shouldBufferFinalOnlyPayload || shouldBufferStructuredMarkdownPayload) {
           if (textToSend) {

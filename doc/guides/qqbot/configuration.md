@@ -127,6 +127,10 @@ openclaw config set channels.qqbot.textChunkLimit 1500
 openclaw config set channels.qqbot.replyFinalOnly false
 openclaw config set channels.qqbot.c2cMarkdownDeliveryMode proactive-table-only
 openclaw config set channels.qqbot.c2cMarkdownChunkStrategy markdown-block
+
+# 这项通常不用手动配；只有你想覆盖默认“自动安全分片”时才需要显式设置
+openclaw config set channels.qqbot.c2cMarkdownSafeChunkByteLimit 1200
+
 openclaw config set channels.qqbot.typingHeartbeatMode idle
 openclaw config set channels.qqbot.typingHeartbeatIntervalMs 5000
 openclaw config set channels.qqbot.typingInputSeconds 60
@@ -146,7 +150,7 @@ openclaw config set channels.qqbot.longTaskNoticeDelayMs 5000
 
 - 必填：`enabled`、`appId`、`clientSecret`
 - 通常保持默认即可：`dmPolicy`、`groupPolicy`、`requireMention`、`textChunkLimit`
-- 需要调交互体验时再看：`replyFinalOnly`、`c2cMarkdownDeliveryMode`、`c2cMarkdownChunkStrategy`、`typingHeartbeatMode`、`typingHeartbeatIntervalMs`、`typingInputSeconds`、`autoSendLocalPathMedia`、`longTaskNoticeDelayMs`
+- 需要调交互体验时再看：`replyFinalOnly`、`c2cMarkdownDeliveryMode`、`c2cMarkdownChunkStrategy`、`c2cMarkdownSafeChunkByteLimit`、`typingHeartbeatMode`、`typingHeartbeatIntervalMs`、`typingInputSeconds`、`autoSendLocalPathMedia`、`longTaskNoticeDelayMs`
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
@@ -162,7 +166,8 @@ openclaw config set channels.qqbot.longTaskNoticeDelayMs 5000
 | textChunkLimit | number | 1500 | 单条消息允许的最大文本长度；超出后会自动拆成多条 |
 | replyFinalOnly | boolean | false | 是否只发最终答案。`false` 时，QQ 私聊配合 `/verbose on` 会把 assistant 过渡说明和 tool 日志按真实顺序实时分条回发；`true` 时不发普通中间文本，但图片、语音这类媒体结果仍可正常发送 |
 | c2cMarkdownDeliveryMode | string | "proactive-table-only" | QQ 私聊里 Markdown 用什么方式发。默认只在“带表格”时切到更稳的方式；如果格式老是乱，可以改成 `proactive-all` |
-| c2cMarkdownChunkStrategy | string | "markdown-block" | QQ 私聊长 Markdown 的切分策略。默认优先按标题、表格、引用、分隔线、代码块等安全边界切分；如需回退旧行为可改成 `length` |
+| c2cMarkdownChunkStrategy | string | "markdown-block" | QQ 私聊长 Markdown 的切分策略。默认优先按标题、表格、引用、分隔线、代码块等安全边界切分；长表格会尽量按完整行贪心打包，续块自动补表头；如果上游流式把同一行拆碎，也会先在本地合并后再统一发送。如需回退旧行为可改成 `length` |
+| c2cMarkdownSafeChunkByteLimit | number | 自动 | QQ 私聊结构化 Markdown 的保守分片上限，单位字节。默认自动模式当前最多控制在约 `1200` bytes，并会对宽表额外留一点余量；如果你的长表格仍被平台二次截断，可以手动调小，比如 `1000` 或 `900`；如果你更想减少消息条数，也可以试 `1300` 或 `1350` |
 | typingHeartbeatMode | string | "idle" | QQ 私聊 `对方正在输入中` 的续发策略。`none` 只发首个 typing；`idle` 只在回复空档续发；`always` 固定间隔续发到整轮回复结束 |
 | typingHeartbeatIntervalMs | number | 5000 | typing 续发周期，单位毫秒。仅在 `typingHeartbeatMode` 不为 `none` 时生效 |
 | typingInputSeconds | number | 60 | 单次发送给 QQ 平台的 typing 有效时长，单位秒 |
@@ -231,6 +236,7 @@ openclaw config set channels.qqbot.autoSendLocalPathMedia false
 openclaw config set channels.qqbot.markdownSupport true
 openclaw config set channels.qqbot.c2cMarkdownDeliveryMode proactive-all
 openclaw config set channels.qqbot.c2cMarkdownChunkStrategy markdown-block
+openclaw config set channels.qqbot.c2cMarkdownSafeChunkByteLimit 1000
 ```
 
 两个配置的职责不同：
@@ -241,13 +247,23 @@ openclaw config set channels.qqbot.c2cMarkdownChunkStrategy markdown-block
 - `proactive-all`：所有私聊 Markdown 都走更稳的方式发。如果你经常遇到标题、引用、分割线、表格显示不对，优先试这个
 - `c2cMarkdownChunkStrategy`：决定长 Markdown 被拆成多条时怎么切
 - `markdown-block`：默认值。会优先按标题、表格、引用、分隔线、代码块、列表和正文块这些安全边界切分；`replyFinalOnly=false` 时，还会先合并连续的结构化 Markdown，再把 tool/log 文本按原顺序单独发送
+- 表格细节：会尽量按“完整表头 + 完整行”贪心装箱；如果再放下一整行就快超上限，会在这一行前安全断开，并在下一条自动重复表头
+- 只有在“表头 + 单独这一整行”本身都已经超过安全上限时，才会进入更细粒度的兜底拆分；正常宽表不会随便把一整行从中间切断
+- 如果上游流式输出把一行表格拆成几段，比如前一段只到 `| 9 | TSMC`，后一段从 `7nm/3nm制程 | ...` 开始，插件会先按上下文和列数把它们拼回同一行，再统一分片
 - `length`：回退旧行为，继续按长度直接切分
+- `c2cMarkdownSafeChunkByteLimit`：决定结构化 Markdown 在进入安全切分时，最多按多少字节保守分块
+- 不配置时：插件会自动留余量，当前默认最多控制在约 `1200` bytes；宽表会比普通文本稍微更保守一点，但不会再过度缩小到导致消息条数异常增多
+- 需要更保守时：可以显式调小，比如 `1000`、`900`
+- 如果你更想减少消息条数，可以试 `1300` 或 `1350`
+- 不建议调大到接近 `textChunkLimit`，否则又可能被 QQ 平台按真实字节数二次硬拆
 
 补充说明：
 
 - 这套安全切分只作用于 `markdownSupport=true` 的 QQ 私聊/C2C Markdown
 - 群聊、频道、非 Markdown 文本、媒体发送顺序都不受影响
+- 如果你看到日志里 `phase=buffered` 的分片都带着完整表头，基本就说明当前是按新的安全表格切分策略在发
 - 如果你需要对单个账号单独覆盖，也可以设置 `channels.qqbot.accounts.<accountId>.c2cMarkdownChunkStrategy`
+- 如果你需要对单个账号单独覆盖，也可以设置 `channels.qqbot.accounts.<accountId>.c2cMarkdownSafeChunkByteLimit`
 
 ### 3.2 私聊实时回发语义
 

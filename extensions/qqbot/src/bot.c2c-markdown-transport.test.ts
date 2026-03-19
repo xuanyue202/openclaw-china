@@ -249,6 +249,77 @@ describe("QQBot C2C markdown transport", () => {
     });
   });
 
+  it("buffers fragmented c2c table continuations until the final markdown flush", async () => {
+    installReplyRuntime([
+      {
+        text:
+          "| 序号 | 公司 | 代表产品 | 一句话 |\n|------|------|----------|--------|\n| 1 | TSMC",
+        kind: "block",
+      },
+      {
+        text:
+          "7nm/3nm制程 | 世界的芯片工厂 |\n| 2 | 腾讯 | 微信 | 万物皆可微信 |",
+        kind: "final",
+      },
+    ]);
+    const logger = createLogger();
+
+    await handleQQBotDispatch({
+      eventType: "C2C_MESSAGE_CREATE",
+      eventData: {
+        id: "msg-fragmented-table-1",
+        event_id: "evt-fragmented-table-1",
+        content: "hello",
+        timestamp: 1700000000001,
+        author: {
+          user_openid: "u-fragmented-table-1",
+          username: "Alice",
+        },
+      },
+      cfg: {
+        channels: {
+          qqbot: {
+            ...baseCfg.channels.qqbot,
+            c2cMarkdownDeliveryMode: "proactive-all",
+          },
+        },
+      },
+      accountId: "default",
+      logger,
+    });
+
+    expect(outboundMocks.sendText).toHaveBeenCalledTimes(1);
+    expect(outboundMocks.sendText).toHaveBeenCalledWith({
+      accountId: "default",
+      cfg: {
+        channels: {
+          qqbot: {
+            ...baseCfg.channels.qqbot,
+            c2cMarkdownDeliveryMode: "proactive-all",
+          },
+        },
+      },
+      to: "user:u-fragmented-table-1",
+      text:
+        "| 序号 | 公司 | 代表产品 | 一句话 |\n" +
+        "|------|------|----------|--------|\n" +
+        "| 1 | TSMC | 7nm/3nm制程 | 世界的芯片工厂 |\n" +
+        "| 2 | 腾讯 | 微信 | 万物皆可微信 |",
+      replyToId: undefined,
+      replyEventId: undefined,
+    });
+    expect(
+      logger.info.mock.calls.some(([message]) =>
+        String(message).includes("phase=immediate")
+      )
+    ).toBe(false);
+    expect(
+      logger.info.mock.calls.some(([message]) =>
+        String(message).includes("phase=buffered")
+      )
+    ).toBe(true);
+  });
+
   it("keeps assistant notes interleaved with verbose c2c markdown payloads", async () => {
     installReplyRuntime([
       { text: "我先说明一下当前进展。", kind: "block" },

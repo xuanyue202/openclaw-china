@@ -2,12 +2,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_QQBOT_C2C_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
   QQBotConfigSchema,
   mergeQQBotAccountConfig,
   resolveInboundMediaDir,
   resolveInboundMediaKeepDays,
   resolveQQBotAutoSendLocalPathMedia,
   resolveQQBotASRCredentials,
+  resolveQQBotC2CMarkdownSafeChunkByteLimit,
   resolveQQBotCredentials,
   resolveQQBotTypingHeartbeatIntervalMs,
   resolveQQBotTypingHeartbeatMode,
@@ -22,6 +24,7 @@ describe("QQBotConfigSchema", () => {
     expect(cfg.markdownSupport).toBe(true);
     expect(cfg.c2cMarkdownDeliveryMode).toBe("proactive-table-only");
     expect(cfg.c2cMarkdownChunkStrategy).toBe("markdown-block");
+    expect(resolveQQBotC2CMarkdownSafeChunkByteLimit(cfg)).toBeUndefined();
     expect(resolveQQBotTypingHeartbeatMode(cfg)).toBe("idle");
     expect(resolveQQBotTypingHeartbeatIntervalMs(cfg)).toBe(5000);
     expect(resolveQQBotTypingInputSeconds(cfg)).toBe(60);
@@ -37,6 +40,7 @@ describe("QQBotConfigSchema", () => {
     expect(() => QQBotConfigSchema.parse({ longTaskNoticeDelayMs: -1 })).toThrow();
     expect(() => QQBotConfigSchema.parse({ c2cMarkdownDeliveryMode: "invalid" })).toThrow();
     expect(() => QQBotConfigSchema.parse({ c2cMarkdownChunkStrategy: "invalid" })).toThrow();
+    expect(() => QQBotConfigSchema.parse({ c2cMarkdownSafeChunkByteLimit: 0 })).toThrow();
     expect(() => QQBotConfigSchema.parse({ typingHeartbeatMode: "invalid" })).toThrow();
     expect(() => QQBotConfigSchema.parse({ typingHeartbeatIntervalMs: 0 })).toThrow();
     expect(() => QQBotConfigSchema.parse({ typingInputSeconds: 0 })).toThrow();
@@ -181,6 +185,26 @@ describe("QQBotConfigSchema", () => {
     );
 
     expect(merged.c2cMarkdownChunkStrategy).toBe("markdown-block");
+  });
+
+  it("allows account-level override for markdown safe chunk byte limit", () => {
+    const merged = mergeQQBotAccountConfig(
+      {
+        channels: {
+          qqbot: {
+            c2cMarkdownSafeChunkByteLimit: DEFAULT_QQBOT_C2C_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
+            accounts: {
+              main: {
+                c2cMarkdownSafeChunkByteLimit: 960,
+              },
+            },
+          },
+        },
+      },
+      "main"
+    );
+
+    expect(resolveQQBotC2CMarkdownSafeChunkByteLimit(merged)).toBe(960);
   });
 
   it("allows account-level override for typing heartbeat config", () => {
