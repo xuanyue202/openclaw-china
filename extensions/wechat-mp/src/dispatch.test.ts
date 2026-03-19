@@ -128,6 +128,12 @@ describe("wechat-mp dispatch", () => {
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    const calls = (recordInboundSession as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const recordCall = calls[0]?.[0] as
+      | { sessionKey?: string; ctx?: { SessionKey?: string } }
+      | undefined;
+    expect(recordCall?.sessionKey).toBe("session-1");
+    expect(recordCall?.ctx?.SessionKey).toBe("session-1");
   });
 
   it("skips non-intentful event candidate", async () => {

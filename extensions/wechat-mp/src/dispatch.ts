@@ -95,7 +95,7 @@ export async function dispatchWechatMpCandidate(params: {
   const fromLabel = `user:${candidate.openId}`;
   const from = `wechat-mp:${candidate.target}`;
   const to = candidate.target;
-  const effectiveSessionKey = candidate.sessionKey ?? route.sessionKey;
+  const effectiveSessionKey = route.sessionKey;
   const storePath = channel.session?.resolveStorePath?.(params.cfg.session?.store, {
     agentId: route.agentId,
   });
