@@ -229,13 +229,14 @@ openclaw config set gateway.bind lan
 
 3. 在公众号后台填写服务器配置
 
-- URL：`https://your.domain.com:18789/wechat-mp`
+- URL：`https://your.domain.com/wechat-mp`
 - Token：与你配置里的 `channels.wechat-mp.token` 一致
 - EncodingAESKey：与你配置里的 `channels.wechat-mp.encodingAESKey` 一致（safe/compat 时)
 - 消息加解密方式：选择 `明文模式`（plain）或 `安全模式`（safe）
 - 点击提交，完成验证
 - 如果验证失败，检查日志中的错误信息，确认公网地址和端口配置正确，并且网关正在运行。
 - 扫码体验二维码，关注公众号。
+    > ![扫码登录](../../images/wechat-demo4.png)
 - 验证成功后，向公众号发送一条文本消息，确认能收到回复。
 - 如果replyMode passive，确认回复消息在5秒内返回；（订阅号必须 passive）
 - 如果replyMode active，确认回复消息通过客服消息接口发送成功。（服务号推荐 active）
@@ -243,7 +244,6 @@ openclaw config set gateway.bind lan
   > ```bash
   > openclaw config set channels.wechat-mp.replyMode active
   > ```
-  >
 
 ---
 
