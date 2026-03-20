@@ -1,0 +1,97 @@
+{
+  "period": {
+    "label": "npm公开接口最长窗口",
+    "start": "2024-09-20",
+    "end": "2026-03-20",
+    "months": 18
+  },
+  "scope": "openclaw-china",
+  "totalDownloads": 141480,
+  "packages": [
+    {
+      "name": "@openclaw-china/channels",
+      "downloads": 17543,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    },
+    {
+      "name": "@openclaw-china/dingtalk",
+      "downloads": 19757,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    },
+    {
+      "name": "@openclaw-china/feishu-china",
+      "downloads": 11350,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    },
+    {
+      "name": "@openclaw-china/qqbot",
+      "downloads": 12328,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    },
+    {
+      "name": "@openclaw-china/shared",
+      "downloads": 37485,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    },
+    {
+      "name": "@openclaw-china/wechat-mp",
+      "downloads": 0,
+      "status": "unavailable",
+      "error": "package @openclaw-china/wechat-mp not found"
+    },
+    {
+      "name": "@openclaw-china/wecom",
+      "downloads": 24915,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    },
+    {
+      "name": "@openclaw-china/wecom-app",
+      "downloads": 18045,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    },
+    {
+      "name": "@openclaw-china/wecom-kf",
+      "downloads": 57,
+      "status": "ok",
+      "range": {
+        "start": "2024-09-20",
+        "end": "2026-03-20"
+      }
+    }
+  ],
+  "unavailablePackages": [
+    {
+      "name": "@openclaw-china/wechat-mp",
+      "status": "unavailable",
+      "error": "package @openclaw-china/wechat-mp not found"
+    }
+  ]
+}

@@ -14,6 +14,7 @@
     "build:shared": "pnpm -F @openclaw-china/shared build",
     "build:dingtalk": "pnpm -F @openclaw-china/dingtalk build",
     "build:channels": "pnpm -F @openclaw-china/channels build",
+    "badge:npm-downloads": "node scripts/update-npm-download-badge.mjs",
     "release:all": "node scripts/release-all.mjs",
     "release:channel": "node scripts/release-all.mjs",
     "clean": "pnpm -r clean",

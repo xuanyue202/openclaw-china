@@ -1,9 +1,19 @@
-# 🦞 OpenClaw China — China IM Channels
+# 🦞 OpenClaw China
 
-<p align="center">
-  <strong>面向中国 IM 平台的 OpenClaw 扩展插件集合</strong>
+> OpenClaw 的中国 IM 渠道扩展集合
+
+<p>
+  <img alt="downloads" src="./.github/badges/npm-downloads-18m.svg" />
+  <a href="./package.json">
+    <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-1f6feb?logo=open-source-initiative&logoColor=white" />
+  </a>
+ <a href="https://linux.do" alt="LINUX DO"><img src="https://shorturl.at/ggSqS" /></a>
 </p>
-<p align="center">
+
+OpenClaw China 为 OpenClaw 提供面向中国常用通讯平台的渠道扩展，帮助你把 AI 助手接入钉钉、企业微信、企业微信自建应用、微信客服、微信公众号、QQ 和飞书等渠道。项目聚焦稳定的消息收发、统一的插件接入面，以及尽量低门槛的配置流程。
+
+文档目录：
+<p>
   <a href="#快速开始">快速开始</a> •
   <a href="#总体架构">总体架构</a> •
   <a href="#功能支持">功能支持</a> •
@@ -12,16 +22,8 @@
   <a href="#-支持我们">💗 支持我们</a> •
   <a href="#加入交流群"><strong>加入交流群</strong></a>
 </p>
-<p align="center">
-  <strong>⭐ 如果这个项目对你有帮助，请给我们一个Star！⭐</strong><br>
-  <em>您的支持是我们持续改进的动力</em>
-</p>
-<p align="center">
-  <strong>🤖 推荐：<a href="https://github.com/BytePioneer-AI/clawmate">ClawMate</a></strong> — 为 OpenClaw 添加有温度的角色伴侣
-</p>
-<p align="center">
-    <a href="https://linux.do" alt="LINUX DO"><img src="https://shorturl.at/ggSqS" /></a>
-</p>
+> **⭐ 如果这个项目对你有帮助，请给我们一个 Star！⭐**
+您的支持是我们持续改进的动力
 
 <table align="center">
   <thead>
@@ -75,9 +77,6 @@
       <td align="center">中等</td>
       <td>-</td>
     </tr>
-
-
-
   </tbody>
 </table>
 
@@ -114,16 +113,13 @@
 
 更多功能在努力开发中~
 
-- **【全网首发】钉钉、QQ、企微支持文件接受和发送**
-- **【全网首发】钉钉、QQ、飞书、企微支持定时任务**
-
 **企业微信 3 个渠道 + 微信公众号怎么选**
 
-- `企业微信智能机器人（长连接）`：主要面向企业内部使用，支持企微内部私聊和群聊，不需要公网 IP，部署成本最低。不能接入微信。
+- `企业微信智能机器人（长连接）`：主要面向企业内部使用，支持企微内部私聊和群聊，不需要公网 IP，部署成本最低。不能接入微信。【企业内使用 | 推荐】
 
-- `企业微信自建应用（可接入普通微信）`：可接入普通微信，不支持群聊，需要公网 IP。
+- `企业微信自建应用（可接入普通微信）`：可接入普通微信，不支持群聊，需要公网 IP。【个人使用 | 推荐】
 
-- `微信客服（外部微信用户）`：适合让任意微信用户通过客服入口与企业的 OpenClaw 对话，不支持群聊，需要公网 IP。
+- `微信客服（外部微信用户）`：适合让任意微信用户通过客服入口与企业的 OpenClaw 对话，不支持群聊，需要公网 IP。【企业外部客户使用 | 推荐】
 
   > 按微信客服官方入口范围，理论上还可承接视频号小店、视频号主页、直播间、微信内网页、公众号菜单、小程序、搜一搜品牌官方区、支付凭证等入口，最终都是跳转到客服对话。
 
@@ -162,6 +158,8 @@
   - 优先在自然边界处分割：段落 `\n\n` → 分割线 `---` → 换行 `\n` → 句末标点 → 空格
   - 确保不截断多字节字符（中文等），分割后逐条发送
   - 新增 14 个单元测试覆盖字节计算和分割逻辑
+- `wecom` 对外状态上报现在会暴露更完整的 runtime snapshot；长连接 `ws` 模式的底层 `ready` 状态也会正确映射为 `connected`，减少状态面板和探测结果误报“未连接”的情况。
+- Merge PR #193：`dingtalk` 现在会向 Gateway 透传 `x-openclaw-message-channel` 与 `x-openclaw-session-key` 请求头，修复缺少渠道标识时被默认识别为 `webchat`、导致 Agent 看到错误渠道信息的问题。
 
 ### 2026-03-19
 
