@@ -86,7 +86,7 @@ OpenClaw China 为 OpenClaw 提供面向中国常用通讯平台的渠道扩展�
       <td>企业微信（自建应用-可接入微信）</td>
       <td align="center">✅ 可用</td>
       <td align="center">中等</td>
-      <td><a href="doc/guides/wecom-app/configuration.md">企业微信自建应用配置指南</a></td>
+      <td><a href="doc/guides/wecom-app/configuration.md">企业微信自建应用配置指南</a>（支持 <a href="wecom-app-relay/README.md">WebSocket 中继</a>，无需公网 IP）</td>
     </tr>
     <tr>
       <td>微信客服（微信客服-外部微信用户）</td>
@@ -169,7 +169,7 @@ OpenClaw China 为 OpenClaw 提供面向中国常用通讯平台的渠道扩展�
 
 - `企业微信智能机器人（长连接）`：主要面向企业内部使用，支持企微内部私聊和群聊，不需要公网 IP，部署成本最低。不能接入微信。【企业内使用 | 推荐】
 
-- `企业微信自建应用（可接入普通微信）`：可接入普通微信，不支持群聊，需要公网 IP。【个人使用 | 推荐】
+- `企业微信自建应用（可接入普通微信）`：可接入普通微信，不支持群聊。支持 Webhook（需要公网 IP）和 [WebSocket 中继](wecom-app-relay/README.md)（无需公网 IP）两种模式。【个人使用 | 推荐】
 
 - `微信客服（外部微信用户）`：适合让任意微信用户通过客服入口与企业的 OpenClaw 对话，不支持群聊，需要公网 IP。【企业外部客户使用 | 推荐】
 
@@ -371,44 +371,44 @@ OpenClaw China 为 OpenClaw 提供面向中国常用通讯平台的渠道扩展�
 **安装统一包（包含所有渠道）**
 
 ```bash
-openclaw plugins install @openclaw-china/channels
+openclaw plugins install @xuanyue202/channels
 openclaw china setup
 ```
 
 **或者：安装单个渠道（不要和统一包同时安装）**
 
 ```bash
-openclaw plugins install @openclaw-china/dingtalk
+openclaw plugins install @xuanyue202/dingtalk
 openclaw china setup
 ```
 
 ```bash
-openclaw plugins install @openclaw-china/feishu-china
+openclaw plugins install @xuanyue202/feishu-china
 openclaw china setup
 ```
 
 ```bash
-openclaw plugins install @openclaw-china/qqbot
+openclaw plugins install @xuanyue202/qqbot
 openclaw china setup
 ```
 
 ```bash
-openclaw plugins install @openclaw-china/wecom-app
+openclaw plugins install @xuanyue202/wecom-app
 openclaw china setup
 ```
 
 ```bash
-openclaw plugins install @openclaw-china/wecom-kf
+openclaw plugins install @xuanyue202/wecom-kf
 openclaw china setup
 ```
 
 ```bash
-openclaw plugins install @openclaw-china/wechat-mp
+openclaw plugins install @xuanyue202/wechat-mp
 openclaw china setup
 ```
 
 ```bash
-openclaw plugins install @openclaw-china/wecom
+openclaw plugins install @xuanyue202/wecom
 openclaw china setup
 ```
 
@@ -442,7 +442,7 @@ pnpm build
 
 > 链接模式下构建后即生效，重启 Gateway 即可。
 
-> ℹ️ 如果你使用的是旧名称 **clawbot**，请使用 `@openclaw-china/channels@0.1.12`。
+> ℹ️ 如果你使用的是旧名称 **clawbot**，请使用 `@xuanyue202/channels@0.1.12`。
 
 ### 2) 配置渠道
 
@@ -798,7 +798,7 @@ openclaw config set channels.qqbot.accounts.main.streaming true
 import {
   listKnownQQBotTargets,
   sendProactiveQQBotMessage,
-} from "@openclaw-china/qqbot";
+} from "@xuanyue202/qqbot";
 
 const targets = listKnownQQBotTargets({ accountId: "default" });
 
@@ -1032,7 +1032,7 @@ flowchart TD
     %% 2. 调度中心 (Rounded Rectangle)
     subgraph Dispatcher [" 核心调度与分发中心 "]
         direction TB
-        CH("📦 @openclaw-china/channels"):::aggregate
+        CH("📦 @xuanyue202/channels"):::aggregate
     end
 
     %% 3. 插件网格 (利用子图内部布局)
@@ -1048,7 +1048,7 @@ flowchart TD
     %% 4. 基础设施层 (Rounded Rectangle)
     subgraph SharedLayer [" 基础设施层 (Shared) "]
         direction TB
-        SH("🛠️ @openclaw-china/shared"):::shared
+        SH("🛠️ @xuanyue202/shared"):::shared
     end
 
     %% --- 核心连接逻辑 ---

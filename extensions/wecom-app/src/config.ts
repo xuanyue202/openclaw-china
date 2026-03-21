@@ -19,6 +19,7 @@ export const DEFAULT_ACCOUNT_ID = "default";
 const WecomAppAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  mode: z.enum(["webhook", "ws-relay"]).optional(),
   webhookPath: z.string().optional(),
   token: z.string().optional(),
   encodingAESKey: z.string().optional(),
@@ -66,6 +67,13 @@ const WecomAppAccountSchema = z.object({
   welcomeText: z.string().optional(),
   dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional(),
   allowFrom: z.array(z.string()).optional(),
+
+  // ws-relay 模式
+  wsRelayUrl: z.string().optional(),
+  wsRelayWebhookUrl: z.string().optional(),
+  wsRelayUserId: z.string().optional(),
+  wsRelayReconnectMs: z.number().int().positive().optional(),
+  wsRelayInsecure: z.boolean().optional(),
 });
 
 export const WecomAppConfigSchema = WecomAppAccountSchema.extend({
@@ -82,6 +90,7 @@ export const WecomAppConfigJsonSchema = {
     properties: {
       name: { type: "string" },
       enabled: { type: "boolean" },
+      mode: { type: "string", enum: ["webhook", "ws-relay"] },
       webhookPath: { type: "string" },
       token: { type: "string" },
       encodingAESKey: { type: "string" },
@@ -90,6 +99,11 @@ export const WecomAppConfigJsonSchema = {
       corpSecret: { type: "string" },
       agentId: { type: "number" },
       apiBaseUrl: { type: "string" },
+      wsRelayUrl: { type: "string" },
+      wsRelayWebhookUrl: { type: "string" },
+      wsRelayUserId: { type: "string" },
+      wsRelayReconnectMs: { type: "number" },
+      wsRelayInsecure: { type: "boolean" },
       inboundMedia: {
         type: "object",
         additionalProperties: false,
@@ -133,6 +147,7 @@ export const WecomAppConfigJsonSchema = {
           properties: {
             name: { type: "string" },
             enabled: { type: "boolean" },
+            mode: { type: "string", enum: ["webhook", "ws-relay"] },
             webhookPath: { type: "string" },
             token: { type: "string" },
             encodingAESKey: { type: "string" },
@@ -141,6 +156,10 @@ export const WecomAppConfigJsonSchema = {
             corpSecret: { type: "string" },
             agentId: { type: "number" },
             apiBaseUrl: { type: "string" },
+            wsRelayUrl: { type: "string" },
+            wsRelayWebhookUrl: { type: "string" },
+            wsRelayUserId: { type: "string" },
+            wsRelayReconnectMs: { type: "number" },
             inboundMedia: {
               type: "object",
               additionalProperties: false,
@@ -272,7 +291,11 @@ export function resolveWecomAppAccount(params: { cfg: PluginConfig; accountId?: 
     (isDefaultAccount ? process.env.WECOM_APP_API_BASE_URL?.trim() : undefined) ||
     undefined;
 
-  const configured = Boolean(token && encodingAESKey);
+  const mode = (merged.mode ?? "webhook") as "webhook" | "ws-relay";
+  // ws-relay 模式下只要 token + encodingAESKey 即可解密消息（corpId 等用于 relay auth）
+  const configured = mode === "ws-relay"
+    ? Boolean(token && encodingAESKey && corpId && corpSecret && agentId)
+    : Boolean(token && encodingAESKey);
   const canSendActive = Boolean(corpId && corpSecret && agentId);
 
   return {
@@ -280,6 +303,7 @@ export function resolveWecomAppAccount(params: { cfg: PluginConfig; accountId?: 
     name: merged.name?.trim() || undefined,
     enabled,
     configured,
+    mode,
     token,
     encodingAESKey,
     receiveId,
@@ -288,6 +312,10 @@ export function resolveWecomAppAccount(params: { cfg: PluginConfig; accountId?: 
     agentId,
     canSendActive,
     config: { ...merged, apiBaseUrl },
+    wsRelayUrl: merged.wsRelayUrl?.trim() || undefined,
+    wsRelayWebhookUrl: merged.wsRelayWebhookUrl?.trim() || undefined,
+    wsRelayUserId: merged.wsRelayUserId?.trim() || undefined,
+    wsRelayInsecure: merged.wsRelayInsecure ?? false,
   };
 }
 

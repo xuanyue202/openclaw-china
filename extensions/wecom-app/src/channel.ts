@@ -15,6 +15,7 @@ import {
   type PluginConfig,
 } from "./config.js";
 import { registerWecomAppWebhookTarget } from "./monitor.js";
+import { startWecomAppWsRelayClient } from "./ws-relay-client.js";
 import { setWecomAppRuntime } from "./runtime.js";
 import { sendWecomAppMessage, stripMarkdown, downloadAndSendImage, downloadAndSendVoice, downloadAndSendFile, downloadAndSendVideo } from "./api.js";
 import { isWecomAudioMimeType, isWecomAudioSource, shouldTranscodeWecomVoice } from "./voice.js";
@@ -637,11 +638,28 @@ export const wecomAppPlugin = {
 
       const account = resolveWecomAppAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
       if (!account.configured) {
-        ctx.log?.info(`[wecom-app] account ${ctx.accountId} not configured; webhook not registered`);
+        ctx.log?.info(`[wecom-app] account ${ctx.accountId} not configured (mode=${account.mode})`);
         ctx.setStatus?.({ accountId: ctx.accountId, running: false, configured: false });
         return;
       }
 
+      // ws-relay 模式：通过 WebSocket 连接中继服务
+      if (account.mode === "ws-relay") {
+        ctx.log?.info(`[wecom-app] starting ws-relay client for account ${ctx.accountId}`);
+        await startWecomAppWsRelayClient({
+          cfg: (ctx.cfg ?? {}) as PluginConfig,
+          account,
+          runtime: {
+            log: ctx.log?.info ?? console.log,
+            error: ctx.log?.error ?? console.error,
+          },
+          abortSignal: ctx.abortSignal,
+          setStatus: (patch) => ctx.setStatus?.({ accountId: ctx.accountId, ...patch }),
+        });
+        return;
+      }
+
+      // webhook 模式（默认）
       const path = (account.config.webhookPath ?? "/wecom-app").trim();
       const unregister = registerWecomAppWebhookTarget({
         account,

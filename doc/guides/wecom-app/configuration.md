@@ -79,7 +79,7 @@
 **安装聚合包（包含所有渠道插件）**
 
 ```bash
-openclaw plugins install @openclaw-china/channels
+openclaw plugins install @xuanyue202/channels
 openclaw china setup
 openclaw config set gateway.bind lan
 ```
@@ -87,7 +87,7 @@ openclaw config set gateway.bind lan
 **或 仅安装 wecom-app 插件**
 
 ```bash
-openclaw plugins install @openclaw-china/wecom-app
+openclaw plugins install @xuanyue202/wecom-app
 openclaw china setup
 openclaw config set gateway.bind lan
 ```
@@ -214,6 +214,8 @@ pnpm build
 <img src="image/configuration/1770106297408.png" />
 
 > 💡 如果不知道服务器 IP，可以先尝试发送消息，查看错误日志获取 IP。
+
+> 💡 **没有公网 IP？** 可以使用 WebSocket 中继模式（ws-relay），无需公网 IP 和 IP 白名单。详见下方 [WebSocket 中继模式](#websocket-中继模式ws-relay)。
 
 ---
 
@@ -675,6 +677,135 @@ ffmpeg -i in.wav -ar 8000 -ac 1 -c:a amr_nb out.amr
 ```bash
 pnpm -C extensions/wecom-app test
 ```
+
+### WebSocket 中继模式（ws-relay）
+
+适用于 **没有公网 IP** 或 **不想在 OpenClaw 所在机器暴露端口** 的场景。
+
+#### 工作原理
+
+```
+企微服务器 → [HTTP 回调] → 中继服务器 (公网)
+                               ↕ [WebSocket]
+                          OpenClaw (可在内网)
+                               ↕
+                          中继服务器 → [企微 API] → 企微服务器
+```
+
+- 中继服务器接收企微回调，通过 WebSocket 转发加密原文给 OpenClaw
+- OpenClaw 本地解密处理，通过中继代调企微 API 回复
+- **对话内容在 OpenClaw 端解密，中继服务器看不到明文**
+
+#### 部署中继服务器
+
+在一台有公网 IP 的服务器上：
+
+```bash
+npm install -g @xuanyue202/wecom-app-relay
+```
+
+创建 `relay.config.json`：
+
+```json
+{
+  "port": 9080,
+  "authToken": "你的认证密钥",
+  "accounts": {
+    "default": {
+      "token": "企微回调Token",
+      "encodingAESKey": "企微回调EncodingAESKey",
+      "receiveId": "企业ID",
+      "corpId": "企业ID",
+      "corpSecret": "应用Secret",
+      "agentId": 1000002,
+      "webhookPath": "/wecom"
+    }
+  }
+}
+```
+
+启动：
+
+```bash
+wecom-app-relay --config relay.config.json
+```
+
+详细文档见 [wecom-app-relay README](../../../wecom-app-relay/README.md)。
+
+#### 配置企微后台
+
+- **回调 URL**：`http://中继服务器IP:9080/wecom`
+- **可信 IP**：添加中继服务器的公网 IP（不是 OpenClaw 的 IP）
+
+#### 配置 OpenClaw
+
+```json
+{
+  "channels": {
+    "wecom-app": {
+      "enabled": true,
+      "mode": "ws-relay",
+      "token": "企微回调Token",
+      "encodingAESKey": "企微回调EncodingAESKey",
+      "corpId": "企业ID",
+      "corpSecret": "应用Secret",
+      "agentId": 1000002,
+      "wsRelayUrl": "ws://中继服务器IP:9080/ws",
+      "wsRelayWebhookUrl": "http://中继服务器IP:9080/webhook"
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `mode` | 设为 `"ws-relay"` 启用中继模式（默认 `"webhook"`） |
+| `wsRelayUrl` | 中继 WebSocket 地址 |
+| `wsRelayWebhookUrl` | 中继 HTTP webhook 地址（发送回复用） |
+| `wsRelayUserId` | 连接标识（可选，默认自动生成） |
+| `wsRelayReconnectMs` | 断线重连间隔毫秒（默认 5000） |
+| `wsRelayInsecure` | 跳过 TLS 证书验证（自签证书场景，默认 `false`） |
+
+> **注意**：ws-relay 模式下 `corpId`、`corpSecret`、`agentId`、`token`、`encodingAESKey` 全部必填。
+
+#### 使用自签证书（纯 IP，无域名）
+
+如果中继服务器没有域名，可以用 Caddy 自签证书提供加密传输：
+
+```
+# Caddyfile
+:443 {
+    tls internal
+    reverse_proxy localhost:9080
+}
+```
+
+然后在 OpenClaw 配置中启用 `wsRelayInsecure`：
+
+```json
+{
+  "channels": {
+    "wecom-app": {
+      "mode": "ws-relay",
+      "wsRelayUrl": "wss://123.45.67.89/ws",
+      "wsRelayWebhookUrl": "https://123.45.67.89/webhook",
+      "wsRelayInsecure": true
+    }
+  }
+}
+```
+
+> **安全提示**：`wsRelayInsecure: true` 会跳过证书验证，传输加密但不防中间人攻击。wecom_raw 模式下对话内容本身仍是加密的（企微 AES-256-CBC），中间人只能看到密文。
+
+#### Webhook 模式 vs ws-relay 模式
+
+| | Webhook（默认） | ws-relay |
+|---|---|---|
+| OpenClaw 需要公网 IP | 是 | **否** |
+| 需要 IP 白名单 | OpenClaw 服务器 IP | 中继服务器 IP |
+| 额外部署 | 无 | 中继服务器 |
+| 延迟 | 直连，低 | 多一跳，略高 |
+| 消息安全 | 端到端 | 中继看不到明文（wecom_raw 模式） |
 
 ---
 
