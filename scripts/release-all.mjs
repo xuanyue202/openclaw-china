@@ -15,6 +15,7 @@ const wecomAppPath = path.join(root, "extensions", "wecom-app", "package.json");
 const wecomKfPath = path.join(root, "extensions", "wecom-kf", "package.json");
 const qqbotPath = path.join(root, "extensions", "qqbot", "package.json");
 const wechatMpPath = path.join(root, "extensions", "wechat-mp", "package.json");
+const wecomAppRelayPath = path.join(root, "wecom-app-relay", "package.json");
 const channelsPath = path.join(root, "packages", "channels", "package.json");
 const channelIds = ["dingtalk", "feishu-china", "wecom", "wecom-app", "wecom-kf", "wechat-mp", "qqbot"];
 
@@ -255,8 +256,10 @@ const wecomAppPkg = readJson(wecomAppPath);
 const wecomKfPkg = readJson(wecomKfPath);
 const qqbotPkg = readJson(qqbotPath);
 const wechatMpPkg = readJson(wechatMpPath);
+const wecomAppRelayPkg = readJson(wecomAppRelayPath);
 const channelsPkg = readJson(channelsPath);
 
+const originalWecomAppRelay = readJson(wecomAppRelayPath);
 const originalShared = readJson(sharedPath);
 const originalDingtalk = readJson(dingtalkPath);
 const originalFeishu = readJson(feishuPath);
@@ -307,6 +310,7 @@ try {
     );
     const nextQqbot = getReleaseVersion(qqbotPkg.name, qqbotPkg.version, options.version);
     const nextWechatMp = getReleaseVersion(wechatMpPkg.name, wechatMpPkg.version, options.version);
+    const nextWecomAppRelay = getReleaseVersion(wecomAppRelayPkg.name, wecomAppRelayPkg.version, options.version);
     const nextChannels = getReleaseVersion(
       channelsPkg.name,
       channelsPkg.version,
@@ -351,6 +355,9 @@ try {
     wechatMpPkg.dependencies = wechatMpPkg.dependencies ?? {};
     wechatMpPkg.dependencies["@xuanyue202/shared"] = nextShared;
 
+    wecomAppRelayPkg.version = nextWecomAppRelay;
+    wecomAppRelayPkg.private = false;
+
     channelsPkg.version = nextChannels;
     channelsPkg.dependencies = channelsPkg.dependencies ?? {};
     channelsPkg.dependencies["@xuanyue202/dingtalk"] = nextDingtalk;
@@ -370,6 +377,7 @@ try {
     writeJson(wecomKfPath, wecomKfPkg);
     writeJson(qqbotPath, qqbotPkg);
     writeJson(wechatMpPath, wechatMpPkg);
+    writeJson(wecomAppRelayPath, wecomAppRelayPkg);
     writeJson(channelsPath, channelsPkg);
 
     run("pnpm -F @xuanyue202/shared build");
@@ -380,6 +388,7 @@ try {
     run("pnpm -F @xuanyue202/wecom-kf build");
     run("pnpm -F @xuanyue202/wechat-mp build");
     run("pnpm -F @xuanyue202/qqbot build");
+    run("pnpm -F @xuanyue202/wecom-app-relay build");
     run("pnpm -F @xuanyue202/channels build");
 
     publishPackage(path.join(root, "packages", "shared"), options.tag);
@@ -390,6 +399,7 @@ try {
     publishPackage(path.join(root, "extensions", "wecom-kf"), options.tag);
     publishPackage(path.join(root, "extensions", "wechat-mp"), options.tag);
     publishPackage(path.join(root, "extensions", "qqbot"), options.tag);
+    publishPackage(path.join(root, "wecom-app-relay"), options.tag);
     publishPackage(path.join(root, "packages", "channels"), options.tag);
   } else {
     if (!channelMap[options.channel]) {
@@ -517,5 +527,6 @@ try {
   writeJson(wecomKfPath, originalWecomKf);
   writeJson(qqbotPath, originalQqbot);
   writeJson(wechatMpPath, originalWechatMp);
+  writeJson(wecomAppRelayPath, originalWecomAppRelay);
   writeJson(channelsPath, originalChannels);
 }
