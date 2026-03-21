@@ -9,9 +9,14 @@ export type WecomAppDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
  * 企业微信自建应用账户配置
  * 相比普通 wecom 智能机器人，增加了 corpId, corpSecret, agentId 用于主动发送消息
  */
+export type WecomAppTransportMode = "webhook" | "ws-relay";
+
 export type WecomAppAccountConfig = {
   name?: string;
   enabled?: boolean;
+
+  /** 传输模式: webhook (默认) 或 ws-relay (WebSocket 中继，如 bot.lingti.com) */
+  mode?: WecomAppTransportMode;
 
   /** Webhook 路径 */
   webhookPath?: string;
@@ -75,6 +80,17 @@ export type WecomAppAccountConfig = {
   dmPolicy?: WecomAppDmPolicy;
   /** DM 允许列表 */
   allowFrom?: string[];
+
+  /** ws-relay 中继服务器 WebSocket URL (默认 wss://bot.lingti.com/ws) */
+  wsRelayUrl?: string;
+  /** ws-relay 中继服务器 Webhook URL (默认 https://bot.lingti.com/webhook) */
+  wsRelayWebhookUrl?: string;
+  /** ws-relay user_id (唯一标识，默认自动生成) */
+  wsRelayUserId?: string;
+  /** ws-relay 重连间隔毫秒 (默认 5000) */
+  wsRelayReconnectMs?: number;
+  /** ws-relay 跳过 TLS 证书验证（自签证书场景，默认 false） */
+  wsRelayInsecure?: boolean;
 };
 
 /**
@@ -101,6 +117,8 @@ export type ResolvedWecomAppAccount = {
   name?: string;
   enabled: boolean;
   configured: boolean;
+  /** 传输模式 */
+  mode: WecomAppTransportMode;
   /** 回调 Token */
   token?: string;
   /** 回调消息加密密钥 */
@@ -116,6 +134,14 @@ export type ResolvedWecomAppAccount = {
   /** 是否支持主动发送 (corpId + corpSecret + agentId 均已配置) */
   canSendActive: boolean;
   config: WecomAppAccountConfig;
+  /** ws-relay WebSocket URL */
+  wsRelayUrl?: string;
+  /** ws-relay Webhook URL */
+  wsRelayWebhookUrl?: string;
+  /** ws-relay user_id */
+  wsRelayUserId?: string;
+  /** ws-relay 跳过 TLS 证书验证 */
+  wsRelayInsecure?: boolean;
 };
 
 /** 消息发送目标 */

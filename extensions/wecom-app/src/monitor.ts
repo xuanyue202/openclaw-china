@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
 
-import { createLogger, type Logger } from "@openclaw-china/shared";
+import { createLogger, type Logger } from "@xuanyue202/shared";
 
 import type { ResolvedWecomAppAccount, WecomAppInboundMessage } from "./types.js";
 import type { PluginConfig } from "./config.js";
@@ -169,7 +169,7 @@ async function readRawBody(req: IncomingMessage, maxBytes: number) {
  * 解析 XML 格式数据
  * 企业微信 POST 请求使用 XML 格式
  */
-function parseXmlBody(xml: string): Record<string, string> {
+export function parseXmlBody(xml: string): Record<string, string> {
   const result: Record<string, string> = {};
   // 匹配 CDATA 格式: <Tag><![CDATA[value]]></Tag>
   const cdataRegex = /<([\w:-]+)><!\[CDATA\[([\s\S]*?)\]\]><\/\1>/g;
@@ -268,7 +268,7 @@ function createStreamId(): string {
  * 解析解密后的明文消息
  * 支持 JSON 和 XML 两种格式
  */
-function parseWecomAppPlainMessage(raw: string): WecomAppInboundMessage {
+export function parseWecomAppPlainMessage(raw: string): WecomAppInboundMessage {
   const trimmed = raw.trim();
   
   // XML 格式
