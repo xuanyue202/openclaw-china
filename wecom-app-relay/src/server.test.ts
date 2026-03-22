@@ -474,6 +474,135 @@ describe("relay server", () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════════
+  // Outbound: send_message via WebSocket → WeCom API
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe("send_message (outbound via WebSocket)", () => {
+    it("proxies send_message to WeCom API and returns send_result", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const { ws } = await connectAndAuth(port, "token");
+
+      // Send a send_message request
+      ws.send(JSON.stringify({
+        type: "send_message",
+        id: "req_001",
+        platform: "wecom",
+        channel_id: "UserA",
+        text: "hello from cron",
+      }));
+
+      const result = await wsRecv(ws);
+      expect(result.type).toBe("send_result");
+      expect(result.id).toBe("req_001");
+      expect(result.ok).toBe(true);
+      expect(result.errcode).toBe(0);
+
+      // Verify sendTextMessage was called
+      expect(mockSendText).toHaveBeenCalledTimes(1);
+      const [account, userId, text] = mockSendText.mock.calls[0]!;
+      expect(account.corpId).toBe(TEST_CORP_ID);
+      expect(userId).toBe("UserA");
+      expect(text).toBe("hello from cron");
+    });
+
+    it("returns error when WeCom API call fails", async () => {
+      mockSendText.mockRejectedValueOnce(new Error("api down"));
+
+      const r = await startRelay();
+      const port = getPort(r);
+      const { ws } = await connectAndAuth(port, "token");
+
+      ws.send(JSON.stringify({
+        type: "send_message",
+        id: "req_fail",
+        channel_id: "UserB",
+        text: "should fail",
+      }));
+
+      const result = await wsRecv(ws);
+      expect(result.type).toBe("send_result");
+      expect(result.id).toBe("req_fail");
+      expect(result.ok).toBe(false);
+      expect(result.errmsg).toContain("api down");
+    });
+
+    it("returns error for missing channel_id", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const { ws } = await connectAndAuth(port, "token");
+
+      ws.send(JSON.stringify({
+        type: "send_message",
+        id: "req_no_channel",
+        text: "no target",
+      }));
+
+      const result = await wsRecv(ws);
+      expect(result.type).toBe("send_result");
+      expect(result.ok).toBe(false);
+      expect(result.errmsg).toContain("channel_id and text required");
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("returns error for missing text", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const { ws } = await connectAndAuth(port, "token");
+
+      ws.send(JSON.stringify({
+        type: "send_message",
+        id: "req_no_text",
+        channel_id: "UserA",
+      }));
+
+      const result = await wsRecv(ws);
+      expect(result.type).toBe("send_result");
+      expect(result.ok).toBe(false);
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("ignores send_message from unauthenticated client", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const ws = await connectWs(port);
+      openWs.push(ws);
+
+      // Send before auth - should be ignored (no crash)
+      ws.send(JSON.stringify({
+        type: "send_message",
+        id: "req_unauth",
+        channel_id: "UserA",
+        text: "sneaky",
+      }));
+
+      // Small delay to ensure no crash
+      await new Promise((r) => setTimeout(r, 200));
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("works with credential-based auth", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const { ws } = await connectAndAuth(port, "credentials");
+
+      ws.send(JSON.stringify({
+        type: "send_message",
+        id: "req_cred",
+        channel_id: "UserC",
+        text: "via credentials",
+      }));
+
+      const result = await wsRecv(ws);
+      expect(result.type).toBe("send_result");
+      expect(result.ok).toBe(true);
+
+      expect(mockSendText).toHaveBeenCalledTimes(1);
+      expect(mockSendText.mock.calls[0]![1]).toBe("UserC");
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
   // Health check
   // ════════════════════════════════════════════════════════════════════════════
 

@@ -83,8 +83,9 @@ type RelayMessage = {
 
 type RelayPing = { type: "ping" };
 type RelayError = { type: "error"; code: string; message: string };
+type RelaySendResult = { type: "send_result"; id: string; ok: boolean; errcode?: number; errmsg?: string };
 
-type RelayInbound = RelayAuthResult | RelayWecomRaw | RelayMessage | RelayPing | RelayError;
+type RelayInbound = RelayAuthResult | RelayWecomRaw | RelayMessage | RelayPing | RelayError | RelaySendResult;
 
 type RelayResponsePayload = {
   type: "response";
@@ -94,6 +95,37 @@ type RelayResponsePayload = {
   text?: string;
   files?: Array<{ name: string; media_type: string; data: string }>;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Outbound relay sender (module-level singleton)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type RelaySendFn = (params: {
+  channelId: string;
+  text: string;
+}) => Promise<{ ok: boolean; errcode?: number; errmsg?: string }>;
+
+let activeRelaySender: RelaySendFn | null = null;
+
+/**
+ * Check if a ws-relay outbound sender is active.
+ * Used by api.ts to decide whether to route through relay.
+ */
+export function isWsRelayOutboundActive(): boolean {
+  return activeRelaySender !== null;
+}
+
+/**
+ * Send a message through the active ws-relay connection.
+ * Returns null if no relay is active (caller should fall back to direct API).
+ */
+export async function sendViaWsRelay(params: {
+  channelId: string;
+  text: string;
+}): Promise<{ ok: boolean; errcode?: number; errmsg?: string } | null> {
+  if (!activeRelaySender) return null;
+  return activeRelaySender(params);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Processed message deduplication
@@ -242,6 +274,14 @@ export async function startWecomAppWsRelayClient(opts: {
       let authTimer: ReturnType<typeof setTimeout> | undefined;
       let pingTimer: ReturnType<typeof setInterval> | undefined;
 
+      // Pending outbound request callbacks (keyed by request id)
+      const pendingSendRequests = new Map<string, {
+        resolve: (result: { ok: boolean; errcode?: number; errmsg?: string }) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }>();
+
+      const SEND_TIMEOUT_MS = 30_000;
+
       const cleanup = () => {
         if (authTimer) clearTimeout(authTimer);
         if (pingTimer) clearInterval(pingTimer);
@@ -312,6 +352,9 @@ export async function startWecomAppWsRelayClient(opts: {
           case "message":
             handleMessage(parsed);
             break;
+          case "send_result":
+            handleSendResult(parsed);
+            break;
           case "ping":
             ws.send(JSON.stringify({ type: "pong" }));
             break;
@@ -325,6 +368,15 @@ export async function startWecomAppWsRelayClient(opts: {
 
       ws.on("close", (code, reason) => {
         cleanup();
+        // Clear outbound relay sender
+        activeRelaySender = null;
+        // Reject all pending send requests
+        for (const [id, pending] of pendingSendRequests) {
+          clearTimeout(pending.timer);
+          pending.resolve({ ok: false, errcode: -1, errmsg: "ws-relay disconnected" });
+        }
+        pendingSendRequests.clear();
+
         abortSignal?.removeEventListener("abort", onAbort);
         const reasonStr = reason?.toString("utf8") ?? "";
         logger.info(`ws closed: code=${code} reason=${reasonStr}`);
@@ -361,12 +413,44 @@ export async function startWecomAppWsRelayClient(opts: {
           lastConnectAt: Date.now(),
         });
 
+        // Register outbound relay sender so api.ts can route through relay
+        activeRelaySender = async (params) => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            return { ok: false, errcode: -1, errmsg: "ws-relay not connected" };
+          }
+          const requestId = `send_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+          return new Promise((resolve) => {
+            const timer = setTimeout(() => {
+              pendingSendRequests.delete(requestId);
+              resolve({ ok: false, errcode: -1, errmsg: "send_message timeout" });
+            }, SEND_TIMEOUT_MS);
+            pendingSendRequests.set(requestId, { resolve, timer });
+            ws.send(JSON.stringify({
+              type: "send_message",
+              id: requestId,
+              platform: "wecom",
+              channel_id: params.channelId,
+              text: params.text,
+            }));
+          });
+        };
+
         // Start ping interval
         pingTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "pong" }));
           }
         }, PING_INTERVAL_MS);
+      }
+
+      // ── send_result handler ──
+      function handleSendResult(msg: RelaySendResult): void {
+        const pending = pendingSendRequests.get(msg.id);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingSendRequests.delete(msg.id);
+          pending.resolve({ ok: msg.ok, errcode: msg.errcode, errmsg: msg.errmsg });
+        }
       }
 
       // ── wecom_raw message handler (本地解密) ──
@@ -557,6 +641,7 @@ export async function startWecomAppWsRelayClient(opts: {
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_MS);
   }
 
+  activeRelaySender = null;
   setStatus?.({ running: false, connectionState: "stopped", lastStopAt: Date.now() });
   logger.info("ws-relay client stopped");
 }
