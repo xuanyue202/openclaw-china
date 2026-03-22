@@ -173,6 +173,8 @@ export function createRelayServer(config: RelayConfig) {
         handleAuth(ws, msg);
       } else if (msg.type === "pong") {
         if (client) client.lastPongAt = Date.now();
+      } else if (msg.type === "send_message" && client) {
+        handleSendMessage(client, msg);
       }
     });
 
@@ -271,6 +273,62 @@ export function createRelayServer(config: RelayConfig) {
         success: true,
         session_id: sessionId,
       }));
+    }
+
+    async function handleSendMessage(client: ConnectedClient, msg: Record<string, unknown>) {
+      const requestId = String(msg.id ?? msg.request_id ?? "");
+      const channelId = String(msg.channel_id ?? "");
+      const text = String(msg.text ?? "");
+
+      if (!channelId || !text) {
+        client.ws.send(JSON.stringify({
+          type: "send_result",
+          id: requestId,
+          ok: false,
+          errcode: -1,
+          errmsg: "channel_id and text required",
+        }));
+        return;
+      }
+
+      // Find the account for this client
+      let targetAccount: AccountConfig | undefined;
+      for (const aid of client.accountIds) {
+        targetAccount = config.accounts[aid];
+        if (targetAccount) break;
+      }
+
+      if (!targetAccount) {
+        client.ws.send(JSON.stringify({
+          type: "send_result",
+          id: requestId,
+          ok: false,
+          errcode: -1,
+          errmsg: "no account found for client",
+        }));
+        return;
+      }
+
+      try {
+        const result = await sendTextMessage(targetAccount, channelId, text);
+        log(`send_message → WeCom: userId=${channelId} ok=${result.ok} errcode=${result.errcode}`);
+        client.ws.send(JSON.stringify({
+          type: "send_result",
+          id: requestId,
+          ok: result.ok,
+          errcode: result.errcode,
+          errmsg: result.errmsg,
+        }));
+      } catch (err) {
+        error(`send_message → WeCom failed: ${String(err)}`);
+        client.ws.send(JSON.stringify({
+          type: "send_result",
+          id: requestId,
+          ok: false,
+          errcode: -1,
+          errmsg: String(err),
+        }));
+      }
     }
   });
 

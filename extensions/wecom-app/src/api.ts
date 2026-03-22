@@ -9,6 +9,7 @@ import {
   resolveInboundMediaKeepDays,
   resolveApiBaseUrl,
 } from "./config.js";
+import { isWsRelayOutboundActive, sendViaWsRelay } from "./ws-relay-client.js";
 import { mkdir, writeFile, unlink, rename, copyFile, readdir, stat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { basename, join, extname } from "node:path";
 import { tmpdir } from "node:os";
@@ -582,8 +583,22 @@ export async function sendWecomAppMessage(
     };
   }
 
-  const token = await getAccessToken(account);
   const text = stripMarkdown(message);
+
+  // In ws-relay mode, route through the relay WebSocket to avoid IP whitelist issues
+  if (account.mode === "ws-relay" && isWsRelayOutboundActive()) {
+    const relayResult = await sendViaWsRelay({ channelId: target.userId, text });
+    if (relayResult) {
+      return {
+        ok: relayResult.ok,
+        errcode: relayResult.errcode,
+        errmsg: relayResult.errmsg,
+      };
+    }
+    // relayResult === null means relay not available, fall through to direct API
+  }
+
+  const token = await getAccessToken(account);
 
   const payload: Record<string, unknown> = {
     msgtype: "text",
@@ -631,6 +646,18 @@ export async function sendWecomAppMarkdownMessage(
       errcode: -1,
       errmsg: "Account not configured for active sending (missing corpId, corpSecret, or agentId)",
     };
+  }
+
+  // In ws-relay mode, route through relay (send as plain text since relay only supports text)
+  if (account.mode === "ws-relay" && isWsRelayOutboundActive()) {
+    const relayResult = await sendViaWsRelay({ channelId: target.userId, text: markdownContent });
+    if (relayResult) {
+      return {
+        ok: relayResult.ok,
+        errcode: relayResult.errcode,
+        errmsg: relayResult.errmsg,
+      };
+    }
   }
 
   const token = await getAccessToken(account);
