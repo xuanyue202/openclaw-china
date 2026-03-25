@@ -59,6 +59,8 @@ type RelayAuthResult = {
   success: boolean;
   session_id?: string;
   error?: string;
+  server_version?: string;
+  capabilities?: { media_proxy?: boolean };
 };
 
 type RelayWecomRaw = {
@@ -107,12 +109,32 @@ type RelaySendFn = (params: {
 
 let activeRelaySender: RelaySendFn | null = null;
 
+/** Relay media proxy base info (set when connected) */
+let activeRelayMediaProxy: {
+  /** HTTP(S) base URL of the relay server, e.g. "https://bot.lingti.com" */
+  baseUrl: string;
+  sessionId: string;
+  insecure: boolean;
+} | null = null;
+
 /**
  * Check if a ws-relay outbound sender is active.
  * Used by api.ts to decide whether to route through relay.
  */
 export function isWsRelayOutboundActive(): boolean {
   return activeRelaySender !== null;
+}
+
+/**
+ * Get the relay media proxy info (baseUrl + sessionId) when ws-relay is active.
+ * Returns null if no relay is active.
+ */
+export function getWsRelayMediaProxy(): {
+  baseUrl: string;
+  sessionId: string;
+  insecure: boolean;
+} | null {
+  return activeRelayMediaProxy;
 }
 
 /**
@@ -368,8 +390,9 @@ export async function startWecomAppWsRelayClient(opts: {
 
       ws.on("close", (code, reason) => {
         cleanup();
-        // Clear outbound relay sender
+        // Clear outbound relay sender and media proxy info
         activeRelaySender = null;
+        activeRelayMediaProxy = null;
         // Reject all pending send requests
         for (const [id, pending] of pendingSendRequests) {
           clearTimeout(pending.timer);
@@ -404,7 +427,8 @@ export async function startWecomAppWsRelayClient(opts: {
         authenticated = true;
         sessionId = msg.session_id ?? "";
         reconnectDelay = reconnectBaseMs;
-        logger.info(`auth success, sessionId=${sessionId}`);
+        const serverVer = msg.server_version ? ` server=${msg.server_version}` : "";
+        logger.info(`auth success, sessionId=${sessionId}${serverVer}`);
         setStatus?.({
           connectionState: "connected",
           running: true,
@@ -412,6 +436,20 @@ export async function startWecomAppWsRelayClient(opts: {
           sessionId,
           lastConnectAt: Date.now(),
         });
+
+        // Register relay media proxy info only if the relay server declares media_proxy capability
+        if (msg.capabilities?.media_proxy) {
+          const urlObj = new URL(webhookUrl);
+          activeRelayMediaProxy = {
+            baseUrl: `${urlObj.protocol}//${urlObj.host}`,
+            sessionId,
+            insecure,
+          };
+          logger.info("relay supports media_proxy, registered proxy info");
+        } else {
+          activeRelayMediaProxy = null;
+          logger.info("relay does not advertise media_proxy capability, media downloads will go direct");
+        }
 
         // Register outbound relay sender so api.ts can route through relay
         activeRelaySender = async (params) => {
@@ -642,6 +680,7 @@ export async function startWecomAppWsRelayClient(opts: {
   }
 
   activeRelaySender = null;
+  activeRelayMediaProxy = null;
   setStatus?.({ running: false, connectionState: "stopped", lastStopAt: Date.now() });
   logger.info("ws-relay client stopped");
 }

@@ -12,9 +12,13 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 
+import { createRequire } from "node:module";
 import type { RelayConfig, AccountConfig } from "./config.js";
 import { verifySignature, decrypt } from "./wecom-crypto.js";
 import { sendTextMessage } from "./wecom-api.js";
+
+const require = createRequire(import.meta.url);
+const { version: SERVER_VERSION } = require("../package.json") as { version: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Security constants
@@ -26,6 +30,8 @@ const PONG_TIMEOUT_MS = 90_000;
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024; // 1MB
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_MESSAGES = 120;
+const OFFLINE_BUFFER_MAX = 200;
+const OFFLINE_BUFFER_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -40,6 +46,11 @@ type ConnectedClient = {
   lastPongAt: number;
   messageCount: number;
   rateLimitResetAt: number;
+};
+
+type BufferedMessage = {
+  payload: string; // JSON-serialized relay message
+  receivedAt: number;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,9 +101,50 @@ function checkRateLimit(client: ConnectedClient): boolean {
 export function createRelayServer(config: RelayConfig) {
   const clients = new Map<string, ConnectedClient>();
   const accountToClient = new Map<string, string>(); // accountKey → sessionId
+  const offlineBuffer = new Map<string, BufferedMessage[]>(); // accountId → buffered messages
 
   const log = (msg: string) => console.log(`[relay] ${msg}`);
   const error = (msg: string) => console.error(`[relay] ${msg}`);
+
+  /** Buffer a message for an offline account */
+  function bufferMessage(accountId: string, payload: string): void {
+    let buf = offlineBuffer.get(accountId);
+    if (!buf) {
+      buf = [];
+      offlineBuffer.set(accountId, buf);
+    }
+    // Evict expired entries
+    const now = Date.now();
+    while (buf.length > 0 && now - buf[0]!.receivedAt > OFFLINE_BUFFER_TTL_MS) {
+      buf.shift();
+    }
+    // Enforce max size
+    if (buf.length >= OFFLINE_BUFFER_MAX) {
+      buf.shift();
+      log(`[${accountId}] offline buffer full, oldest message dropped`);
+    }
+    buf.push({ payload, receivedAt: now });
+  }
+
+  /** Flush buffered messages to a newly connected client */
+  function flushBufferedMessages(accountId: string, client: ConnectedClient): void {
+    const buf = offlineBuffer.get(accountId);
+    if (!buf || buf.length === 0) return;
+
+    const now = Date.now();
+    let sent = 0;
+    for (const msg of buf) {
+      if (now - msg.receivedAt > OFFLINE_BUFFER_TTL_MS) continue;
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(msg.payload);
+        sent++;
+      }
+    }
+    offlineBuffer.delete(accountId);
+    if (sent > 0) {
+      log(`[${accountId}] flushed ${sent} buffered message(s) to client ${client.sessionId}`);
+    }
+  }
 
   // ── HTTP server ──
   const server = http.createServer(async (req, res) => {
@@ -119,6 +171,12 @@ export function createRelayServer(config: RelayConfig) {
         await handleWecomCallback(req, res, accountId, accountCfg, url.searchParams);
         return;
       }
+    }
+
+    // Media proxy: relay downloads media from WeCom API on behalf of client
+    if (req.method === "GET" && pathname === "/media/proxy") {
+      await handleMediaProxy(req, res, url.searchParams);
+      return;
     }
 
     // Webhook response from client
@@ -272,7 +330,14 @@ export function createRelayServer(config: RelayConfig) {
         type: "auth_result",
         success: true,
         session_id: sessionId,
+        server_version: SERVER_VERSION,
+        capabilities: { media_proxy: true },
       }));
+
+      // Flush any buffered messages for the authenticated accounts
+      for (const aid of matchedAccountIds) {
+        flushBufferedMessages(aid, client);
+      }
     }
 
     async function handleSendMessage(client: ConnectedClient, msg: Record<string, unknown>) {
@@ -402,17 +467,20 @@ export function createRelayServer(config: RelayConfig) {
       const clientSessionId = accountToClient.get(accountId);
       const client = clientSessionId ? clients.get(clientSessionId) : undefined;
 
+      const relayPayload = JSON.stringify({
+        type: "wecom_raw",
+        msg_signature: signature,
+        timestamp,
+        nonce,
+        body,
+      });
+
       if (client && client.ws.readyState === WebSocket.OPEN) {
-        client.ws.send(JSON.stringify({
-          type: "wecom_raw",
-          msg_signature: signature,
-          timestamp,
-          nonce,
-          body,
-        }));
+        client.ws.send(relayPayload);
         log(`[${accountId}] forwarded wecom_raw to client ${client.sessionId}`);
       } else {
-        log(`[${accountId}] no connected client, message dropped`);
+        bufferMessage(accountId, relayPayload);
+        log(`[${accountId}] no connected client, message buffered`);
       }
 
       // Return empty success to WeCom (must respond within 5s)
@@ -491,6 +559,80 @@ export function createRelayServer(config: RelayConfig) {
     }
   }
 
+  // ── Media proxy handler ──
+  async function handleMediaProxy(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    params: URLSearchParams,
+  ) {
+    // Authenticate via session ID
+    const sessionId = req.headers["x-session-id"] as string ?? "";
+    if (!sessionId || !clients.has(sessionId)) {
+      res.writeHead(401, { "Content-Type": "text/plain" });
+      res.end("invalid or expired session");
+      return;
+    }
+
+    const mediaId = params.get("media_id") ?? "";
+    const accessToken = params.get("access_token") ?? "";
+
+    if (!mediaId || !accessToken) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("media_id and access_token required");
+      return;
+    }
+
+    // Find the account for this session to get apiBaseUrl
+    let targetAccount: AccountConfig | undefined;
+    for (const [aid, sid] of accountToClient) {
+      if (sid === sessionId) {
+        targetAccount = config.accounts[aid];
+        break;
+      }
+    }
+
+    const apiBase = targetAccount?.apiBaseUrl ?? "https://qyapi.weixin.qq.com";
+    const wecomUrl = `${apiBase}/cgi-bin/media/get?access_token=${encodeURIComponent(accessToken)}&media_id=${encodeURIComponent(mediaId)}`;
+
+    try {
+      const upstream = await fetch(wecomUrl);
+
+      // Pass through status code, content-type, and content-disposition
+      const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
+      const contentDisposition = upstream.headers.get("content-disposition");
+      const contentLength = upstream.headers.get("content-length");
+
+      const headers: Record<string, string> = { "Content-Type": contentType };
+      if (contentDisposition) headers["Content-Disposition"] = contentDisposition;
+      if (contentLength) headers["Content-Length"] = contentLength;
+
+      res.writeHead(upstream.status, headers);
+
+      if (!upstream.body) {
+        res.end();
+        return;
+      }
+
+      // Stream the response body
+      const reader = upstream.body.getReader();
+      const pump = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(Buffer.from(value));
+        }
+        res.end();
+      };
+      await pump();
+    } catch (err) {
+      error(`media proxy failed: ${String(err)}`);
+      if (!res.headersSent) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: String(err) }));
+      }
+    }
+  }
+
   // ── Start/Stop ──
   function start(): Promise<void> {
     return new Promise((resolve) => {
@@ -498,6 +640,7 @@ export function createRelayServer(config: RelayConfig) {
         log(`listening on ${config.host}:${config.port}`);
         log(`WebSocket endpoint: ws://${config.host}:${config.port}/ws`);
         log(`Webhook endpoint:   http://${config.host}:${config.port}/webhook`);
+        log(`Media proxy:        http://${config.host}:${config.port}/media/proxy`);
         log(`Health check:       http://${config.host}:${config.port}/health`);
         for (const [aid, acfg] of Object.entries(config.accounts)) {
           log(`WeCom callback [${aid}]: http://${config.host}:${config.port}${acfg.webhookPath}`);
@@ -519,5 +662,5 @@ export function createRelayServer(config: RelayConfig) {
     });
   }
 
-  return { start, stop, server, wss, clients, accountToClient };
+  return { start, stop, server, wss, clients, accountToClient, offlineBuffer };
 }

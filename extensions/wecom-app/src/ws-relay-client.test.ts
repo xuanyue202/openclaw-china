@@ -39,7 +39,7 @@ type MockRelayServer = {
   waitForWebhookResponse: (timeoutMs?: number) => Promise<Record<string, unknown>>;
 };
 
-async function createMockRelayServer(): Promise<MockRelayServer> {
+async function createMockRelayServer(opts?: { capabilities?: Record<string, unknown> }): Promise<MockRelayServer> {
   const connectedClients: WebSocket[] = [];
   const webhookResponses: MockRelayServer["webhookResponses"] = [];
   let webhookResolve: ((body: Record<string, unknown>) => void) | null = null;
@@ -90,6 +90,7 @@ async function createMockRelayServer(): Promise<MockRelayServer> {
             type: "auth_result",
             success: true,
             session_id: `test_session_${Date.now()}`,
+            ...(opts?.capabilities ? { capabilities: opts.capabilities } : {}),
           }));
         } else if (msg.type === "pong") {
           // heartbeat response, ignore
@@ -448,6 +449,74 @@ describe("ws-relay-client integration", () => {
     // Should see deduplication log
     const dupeLog = logs.filter((l) => l.includes("duplicate"));
     expect(dupeLog.length).toBeGreaterThanOrEqual(1);
+
+    abortController.abort();
+    await Promise.race([clientPromise, new Promise((r) => setTimeout(r, 2000))]);
+  }, 10000);
+
+  it("exposes media proxy info when server declares media_proxy capability", async () => {
+    relay = await createMockRelayServer({ capabilities: { media_proxy: true } });
+    const account = buildTestAccount(relay.port);
+    abortController = new AbortController();
+
+    const statusUpdates: Record<string, unknown>[] = [];
+
+    const { startWecomAppWsRelayClient, getWsRelayMediaProxy } = await import("./ws-relay-client.js");
+
+    const clientPromise = startWecomAppWsRelayClient({
+      cfg: {},
+      account,
+      runtime: { log: () => {}, error: () => {} },
+      abortSignal: abortController.signal,
+      setStatus: (status) => statusUpdates.push({ ...status }),
+    });
+
+    // Wait for auth
+    await waitUntil(() => {
+      return statusUpdates.some((s) => s.connectionState === "connected");
+    }, 5000, "client should authenticate");
+
+    // Media proxy info should be available
+    const proxy = getWsRelayMediaProxy();
+    expect(proxy).not.toBeNull();
+    expect(proxy!.baseUrl).toBe(`http://127.0.0.1:${relay.port}`);
+    expect(proxy!.sessionId).toBeTruthy();
+    expect(proxy!.insecure).toBe(false);
+
+    // Stop client
+    abortController.abort();
+    await Promise.race([clientPromise, new Promise((r) => setTimeout(r, 2000))]);
+
+    // After disconnect, media proxy should be null
+    const proxyAfter = getWsRelayMediaProxy();
+    expect(proxyAfter).toBeNull();
+  }, 10000);
+
+  it("does not expose media proxy when server omits capabilities", async () => {
+    // No capabilities → simulates old relay server
+    relay = await createMockRelayServer();
+    const account = buildTestAccount(relay.port);
+    abortController = new AbortController();
+
+    const statusUpdates: Record<string, unknown>[] = [];
+
+    const { startWecomAppWsRelayClient, getWsRelayMediaProxy } = await import("./ws-relay-client.js");
+
+    const clientPromise = startWecomAppWsRelayClient({
+      cfg: {},
+      account,
+      runtime: { log: () => {}, error: () => {} },
+      abortSignal: abortController.signal,
+      setStatus: (status) => statusUpdates.push({ ...status }),
+    });
+
+    await waitUntil(() => {
+      return statusUpdates.some((s) => s.connectionState === "connected");
+    }, 5000, "client should authenticate");
+
+    // Media proxy should NOT be registered (server didn't declare capability)
+    const proxy = getWsRelayMediaProxy();
+    expect(proxy).toBeNull();
 
     abortController.abort();
     await Promise.race([clientPromise, new Promise((r) => setTimeout(r, 2000))]);
