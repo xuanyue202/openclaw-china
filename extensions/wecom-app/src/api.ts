@@ -9,7 +9,8 @@ import {
   resolveInboundMediaKeepDays,
   resolveApiBaseUrl,
 } from "./config.js";
-import { isWsRelayOutboundActive, sendViaWsRelay } from "./ws-relay-client.js";
+import { isWsRelayOutboundActive, sendViaWsRelay, getWsRelayMediaProxy } from "./ws-relay-client.js";
+import https from "node:https";
 import { mkdir, writeFile, unlink, rename, copyFile, readdir, stat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { basename, join, extname } from "node:path";
 import { tmpdir } from "node:os";
@@ -430,6 +431,50 @@ function getWecomTempDir(): string {
 }
 
 /**
+ * Wrapper around https.request for self-signed cert scenarios.
+ * Returns a Response-like object compatible with the streaming download code.
+ */
+function insecureFetch(url: string, opts: RequestInit & { headers?: Record<string, string> }): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = https.request({
+      hostname: parsed.hostname,
+      port: parsed.port || 443,
+      path: parsed.pathname + parsed.search,
+      method: "GET",
+      headers: opts.headers,
+      rejectUnauthorized: false,
+    }, (res) => {
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) {
+        if (typeof v === "string") headers.set(k, v);
+        else if (Array.isArray(v)) v.forEach((val) => headers.append(k, val));
+      }
+      const readable = new ReadableStream({
+        start(controller) {
+          res.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
+          res.on("end", () => controller.close());
+          res.on("error", (err) => controller.error(err));
+        },
+      });
+      resolve(new Response(readable, {
+        status: res.statusCode ?? 0,
+        statusText: res.statusMessage ?? "",
+        headers,
+      }));
+    });
+    req.on("error", reject);
+    if (opts.signal) {
+      opts.signal.addEventListener("abort", () => {
+        req.destroy();
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      }, { once: true });
+    }
+    req.end();
+  });
+}
+
+/**
  * 下载企业微信 media_id 到本地文件
  * - 优先用于入站 image/file 的落盘
  * - 支持 120 秒超时
@@ -470,12 +515,29 @@ export async function downloadWecomMediaToFile(
       }
       const safeMediaId = raw;
       const token = await getAccessToken(account);
-      const url = buildWecomApiUrl(
-        account,
-        `/cgi-bin/media/get?access_token=${encodeURIComponent(token)}&media_id=${encodeURIComponent(safeMediaId)}`
-      );
 
-      resp = await fetch(url, { signal: controller.signal });
+      // ws-relay 模式下通过 relay 的 media proxy 端点下载，避免 IP 白名单问题
+      const relayProxy = account.mode === "ws-relay" ? getWsRelayMediaProxy() : null;
+
+      let url: string;
+      const fetchOptions: RequestInit & { headers?: Record<string, string> } = { signal: controller.signal };
+
+      if (relayProxy) {
+        url = `${relayProxy.baseUrl}/media/proxy?access_token=${encodeURIComponent(token)}&media_id=${encodeURIComponent(safeMediaId)}`;
+        fetchOptions.headers = { "X-Session-ID": relayProxy.sessionId };
+      } else {
+        url = buildWecomApiUrl(
+          account,
+          `/cgi-bin/media/get?access_token=${encodeURIComponent(token)}&media_id=${encodeURIComponent(safeMediaId)}`
+        );
+      }
+
+      // Use https.request for insecure relay connections (self-signed certs)
+      if (relayProxy?.insecure && url.startsWith("https:")) {
+        resp = await insecureFetch(url, fetchOptions);
+      } else {
+        resp = await fetch(url, fetchOptions);
+      }
       if (!resp.ok) {
         return { ok: false, error: `media/get failed: HTTP ${resp.status}` };
       }

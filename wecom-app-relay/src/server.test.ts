@@ -126,6 +126,35 @@ function httpRequest(port: number, opts: {
   });
 }
 
+/** HTTP request returning raw buffer + headers (for binary proxy tests) */
+function httpRequestRaw(port: number, opts: {
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+}): Promise<{ status: number; headers: Record<string, string>; bodyBuffer: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: "127.0.0.1",
+      port,
+      method: opts.method,
+      path: opts.path,
+      headers: opts.headers,
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === "string") headers[k] = v;
+        }
+        resolve({ status: res.statusCode ?? 0, headers, bodyBuffer: Buffer.concat(chunks) });
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 /** Build encrypted WeCom callback query params for GET verification */
 function buildVerifyParams() {
   const echostr = encrypt(TEST_AES_KEY, TEST_CORP_ID, "verify_ok_12345");
@@ -189,6 +218,15 @@ describe("relay server", () => {
       expect(result.success).toBe(true);
       expect(result.session_id).toBeTruthy();
       expect(r.clients.size).toBe(1);
+    });
+
+    it("returns server_version and capabilities in auth_result", async () => {
+      const r = await startRelay();
+      const { result } = await connectAndAuth(getPort(r), "token");
+      expect(result.success).toBe(true);
+      expect(typeof result.server_version).toBe("string");
+      expect((result.server_version as string).length).toBeGreaterThan(0);
+      expect(result.capabilities).toEqual({ media_proxy: true });
     });
 
     it("accepts lsbot-style credential auth", async () => {
@@ -678,6 +716,350 @@ describe("relay server", () => {
       });
       expect(resp.status).toBe(200);
       expect(resp.body).toBe("verify_ok_12345");
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Media proxy
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe("media proxy", () => {
+    it("rejects request without valid session", async () => {
+      const r = await startRelay();
+      const resp = await httpRequest(getPort(r), {
+        method: "GET",
+        path: "/media/proxy?media_id=mid1&access_token=tok1",
+        headers: { "X-Session-ID": "nonexistent_session" },
+      });
+      expect(resp.status).toBe(401);
+    });
+
+    it("rejects request without session header", async () => {
+      const r = await startRelay();
+      const resp = await httpRequest(getPort(r), {
+        method: "GET",
+        path: "/media/proxy?media_id=mid1&access_token=tok1",
+      });
+      expect(resp.status).toBe(401);
+    });
+
+    it("rejects request with missing media_id", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const { result } = await connectAndAuth(port, "token");
+      const sessionId = result.session_id as string;
+
+      const resp = await httpRequest(port, {
+        method: "GET",
+        path: "/media/proxy?access_token=tok1",
+        headers: { "X-Session-ID": sessionId },
+      });
+      expect(resp.status).toBe(400);
+      expect(resp.body).toContain("media_id");
+    });
+
+    it("rejects request with missing access_token", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const { result } = await connectAndAuth(port, "token");
+      const sessionId = result.session_id as string;
+
+      const resp = await httpRequest(port, {
+        method: "GET",
+        path: "/media/proxy?media_id=mid1",
+        headers: { "X-Session-ID": sessionId },
+      });
+      expect(resp.status).toBe(400);
+      expect(resp.body).toContain("access_token");
+    });
+
+    it("proxies media download from WeCom API and streams response", async () => {
+      const mediaContent = Buffer.from("fake-image-content-png");
+      const originalFetch = globalThis.fetch;
+
+      // Mock fetch to simulate WeCom API response
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        const urlStr = typeof url === "string" ? url : url.toString();
+        if (urlStr.includes("/cgi-bin/media/get")) {
+          return new Response(mediaContent, {
+            status: 200,
+            headers: {
+              "Content-Type": "image/png",
+              "Content-Disposition": 'attachment; filename="test.png"',
+              "Content-Length": String(mediaContent.length),
+            },
+          });
+        }
+        return originalFetch(url as RequestInfo, undefined);
+      }) as typeof fetch;
+
+      try {
+        const r = await startRelay();
+        const port = getPort(r);
+        const { result } = await connectAndAuth(port, "token");
+        const sessionId = result.session_id as string;
+
+        const resp = await httpRequestRaw(port, {
+          method: "GET",
+          path: "/media/proxy?media_id=mid1&access_token=tok1",
+          headers: { "X-Session-ID": sessionId },
+        });
+
+        expect(resp.status).toBe(200);
+        expect(resp.headers["content-type"]).toBe("image/png");
+        expect(resp.headers["content-disposition"]).toBe('attachment; filename="test.png"');
+        expect(resp.bodyBuffer.toString()).toBe(mediaContent.toString());
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("passes through WeCom API error responses (e.g., JSON error)", async () => {
+      const errorJson = JSON.stringify({ errcode: 40007, errmsg: "invalid media_id" });
+      const originalFetch = globalThis.fetch;
+
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        const urlStr = typeof url === "string" ? url : url.toString();
+        if (urlStr.includes("/cgi-bin/media/get")) {
+          return new Response(errorJson, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return originalFetch(url as RequestInfo, undefined);
+      }) as typeof fetch;
+
+      try {
+        const r = await startRelay();
+        const port = getPort(r);
+        const { result } = await connectAndAuth(port, "token");
+        const sessionId = result.session_id as string;
+
+        const resp = await httpRequest(port, {
+          method: "GET",
+          path: "/media/proxy?media_id=bad_id&access_token=tok1",
+          headers: { "X-Session-ID": sessionId },
+        });
+
+        expect(resp.status).toBe(200); // WeCom returns 200 even for errors
+        const body = JSON.parse(resp.body);
+        expect(body.errcode).toBe(40007);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("returns 502 when upstream fetch fails", async () => {
+      const originalFetch = globalThis.fetch;
+
+      globalThis.fetch = (async () => {
+        throw new Error("network error");
+      }) as typeof fetch;
+
+      try {
+        const r = await startRelay();
+        const port = getPort(r);
+        const { result } = await connectAndAuth(port, "token");
+        const sessionId = result.session_id as string;
+
+        const resp = await httpRequest(port, {
+          method: "GET",
+          path: "/media/proxy?media_id=mid1&access_token=tok1",
+          headers: { "X-Session-ID": sessionId },
+        });
+
+        expect(resp.status).toBe(502);
+        const body = JSON.parse(resp.body);
+        expect(body.ok).toBe(false);
+        expect(body.error).toContain("network error");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("uses account apiBaseUrl for upstream request", async () => {
+      const customApiBase = "https://custom-proxy.example.com";
+      let capturedUrl = "";
+      const originalFetch = globalThis.fetch;
+
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        capturedUrl = typeof url === "string" ? url : url.toString();
+        return new Response("ok", {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+      }) as typeof fetch;
+
+      try {
+        const r = await startRelay({
+          accounts: {
+            default: {
+              ...buildConfig().accounts.default,
+              apiBaseUrl: customApiBase,
+            },
+          },
+        });
+        const port = getPort(r);
+        const { result } = await connectAndAuth(port, "token");
+        const sessionId = result.session_id as string;
+
+        await httpRequest(port, {
+          method: "GET",
+          path: "/media/proxy?media_id=mid1&access_token=tok1",
+          headers: { "X-Session-ID": sessionId },
+        });
+
+        expect(capturedUrl).toContain(customApiBase);
+        expect(capturedUrl).toContain("/cgi-bin/media/get");
+        expect(capturedUrl).toContain("media_id=mid1");
+        expect(capturedUrl).toContain("access_token=tok1");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Offline message buffering
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe("offline message buffering", () => {
+    it("buffers messages when no client is connected and flushes on reconnect", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+
+      // Send a WeCom callback without any client connected
+      const plainXml = `<xml><FromUserName><![CDATA[Alice]]></FromUserName><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[offline msg]]></Content><MsgId>buf_001</MsgId></xml>`;
+      const { xmlBody, timestamp, nonce, signature } = buildCallbackBody(plainXml);
+
+      const resp = await httpRequest(port, {
+        method: "POST",
+        path: `/wecom?msg_signature=${encodeURIComponent(signature)}&timestamp=${timestamp}&nonce=${nonce}`,
+        headers: { "Content-Type": "application/xml" },
+        body: xmlBody,
+      });
+      expect(resp.status).toBe(200);
+
+      // Verify message is buffered
+      expect(r.offlineBuffer.get("default")?.length).toBe(1);
+
+      // Now connect a client — collect auth_result + flushed messages
+      const ws = await connectWs(port);
+      openWs.push(ws);
+
+      // Collect messages (auth_result will be sent after auth, then buffered messages)
+      const msgs: Record<string, unknown>[] = [];
+      const collectPromise = new Promise<void>((resolve) => {
+        ws.on("message", (data: Buffer | string) => {
+          msgs.push(JSON.parse(typeof data === "string" ? data : data.toString("utf8")));
+          if (msgs.length >= 2) resolve();
+        });
+        setTimeout(resolve, 3000);
+      });
+
+      ws.send(JSON.stringify({ type: "auth", user_id: "test-user", token: TEST_AUTH_TOKEN }));
+      await collectPromise;
+
+      expect(msgs[0]!.type).toBe("auth_result");
+      expect(msgs[1]!.type).toBe("wecom_raw");
+      expect(msgs[1]!.msg_signature).toBe(signature);
+
+      // Buffer should be cleared after flush
+      expect(r.offlineBuffer.get("default")).toBeUndefined();
+    });
+
+    it("buffers multiple messages and flushes all on reconnect", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+
+      // Send two WeCom callbacks without client
+      for (let i = 0; i < 2; i++) {
+        const plainXml = `<xml><Content><![CDATA[msg ${i}]]></Content><MsgId>multi_${i}</MsgId></xml>`;
+        const { xmlBody, timestamp, nonce, signature } = buildCallbackBody(plainXml);
+        await httpRequest(port, {
+          method: "POST",
+          path: `/wecom?msg_signature=${encodeURIComponent(signature)}&timestamp=${timestamp}&nonce=${nonce}`,
+          headers: { "Content-Type": "application/xml" },
+          body: xmlBody,
+        });
+      }
+
+      expect(r.offlineBuffer.get("default")?.length).toBe(2);
+
+      // Connect client — should receive auth_result + 2 buffered messages
+      const ws = await connectWs(port);
+      openWs.push(ws);
+
+      const msgs: Record<string, unknown>[] = [];
+      const collectPromise = new Promise<void>((resolve) => {
+        ws.on("message", (data: Buffer | string) => {
+          msgs.push(JSON.parse(typeof data === "string" ? data : data.toString("utf8")));
+          if (msgs.length >= 3) resolve();
+        });
+        setTimeout(resolve, 3000);
+      });
+
+      ws.send(JSON.stringify({ type: "auth", user_id: "test-user", token: TEST_AUTH_TOKEN }));
+      await collectPromise;
+
+      expect(msgs[0]!.type).toBe("auth_result");
+      expect(msgs[1]!.type).toBe("wecom_raw");
+      expect(msgs[2]!.type).toBe("wecom_raw");
+
+      expect(r.offlineBuffer.get("default")).toBeUndefined();
+    });
+
+    it("does not buffer when client is connected (sends directly)", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+      const { ws } = await connectAndAuth(port, "token");
+
+      const plainXml = `<xml><Content><![CDATA[online msg]]></Content><MsgId>online_001</MsgId></xml>`;
+      const { xmlBody, timestamp, nonce, signature } = buildCallbackBody(plainXml);
+
+      const msgPromise = wsRecv(ws);
+      await httpRequest(port, {
+        method: "POST",
+        path: `/wecom?msg_signature=${encodeURIComponent(signature)}&timestamp=${timestamp}&nonce=${nonce}`,
+        headers: { "Content-Type": "application/xml" },
+        body: xmlBody,
+      });
+
+      const msg = await msgPromise;
+      expect(msg.type).toBe("wecom_raw");
+
+      // Nothing in the buffer
+      expect(r.offlineBuffer.get("default")).toBeUndefined();
+    });
+
+    it("drops oldest message when buffer is full", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+
+      // Manually fill the buffer to capacity (200 messages)
+      const buf: Array<{ payload: string; receivedAt: number }> = [];
+      for (let i = 0; i < 200; i++) {
+        buf.push({ payload: JSON.stringify({ type: "wecom_raw", idx: i }), receivedAt: Date.now() });
+      }
+      r.offlineBuffer.set("default", buf);
+
+      // Send one more callback → should drop oldest
+      const plainXml = `<xml><Content><![CDATA[overflow]]></Content><MsgId>overflow_001</MsgId></xml>`;
+      const { xmlBody, timestamp, nonce, signature } = buildCallbackBody(plainXml);
+
+      await httpRequest(port, {
+        method: "POST",
+        path: `/wecom?msg_signature=${encodeURIComponent(signature)}&timestamp=${timestamp}&nonce=${nonce}`,
+        headers: { "Content-Type": "application/xml" },
+        body: xmlBody,
+      });
+
+      const updatedBuf = r.offlineBuffer.get("default")!;
+      expect(updatedBuf.length).toBe(200); // still 200, oldest dropped
+      // First message should now be idx=1 (idx=0 was dropped)
+      expect(JSON.parse(updatedBuf[0]!.payload).idx).toBe(1);
+      // Last message should be the new wecom_raw
+      expect(JSON.parse(updatedBuf[199]!.payload).type).toBe("wecom_raw");
     });
   });
 
