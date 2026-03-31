@@ -4,8 +4,8 @@ import { WSClient, type SendMsgBody, type WsFrame as SdkWsFrame } from "@wecom/a
 
 import type { PluginConfig } from "./config.js";
 import { createLogger, type Logger } from "@xuanyue202/shared";
-import type { ResolvedWecomAccount, WecomRetryConfig } from "./types.js";
-import { withWecomRetry } from "./retry.js";
+import type { ResolvedWecomAccount } from "./types.js";
+import { WecomApiError, withWecomRetry, type WecomRetryOptions } from "./retry.js";
 import { dispatchWecomMessage } from "./bot.js";
 import { fetchAndSaveWecomDocMcpConfig } from "./mcp-config.js";
 import { tryGetWecomRuntime } from "./runtime.js";
@@ -249,7 +249,7 @@ async function sendSdkReplyFrame(params: {
   client: WSClient;
   frame: WecomWsFrame;
   logger: Logger;
-  retry?: WecomRetryConfig;
+  retryOpts?: WecomRetryOptions;
 }): Promise<void> {
   const reqId = String(params.frame.headers?.req_id ?? "").trim();
   if (!reqId) {
@@ -265,10 +265,14 @@ async function sendSdkReplyFrame(params: {
         params.frame.cmd
       );
       if (typeof response.errcode === "number" && response.errcode !== 0) {
-        throw new Error(`WeCom ws reply failed: ${response.errcode} ${response.errmsg ?? ""}`.trim());
+        throw new WecomApiError(
+          response.errcode,
+          String(response.errmsg ?? ""),
+          "WeCom ws reply failed",
+        );
       }
     },
-    params.retry,
+    params.retryOpts,
   );
 }
 
@@ -276,7 +280,7 @@ async function sendWecomWsProactiveCommand(params: {
   accountId: string;
   to: string;
   body: SendMsgBody;
-  retry?: WecomRetryConfig;
+  retryOpts?: WecomRetryOptions;
 }): Promise<void> {
   const activated = getActivatedTarget(params.accountId, params.to);
   if (!activated) {
@@ -290,10 +294,14 @@ async function sendWecomWsProactiveCommand(params: {
     async () => {
       const response = await client.sendMessage(activated.chatId, params.body);
       if (typeof response.errcode === "number" && response.errcode !== 0) {
-        throw new Error(`WeCom proactive send failed: ${response.errcode} ${response.errmsg ?? ""}`.trim());
+        throw new WecomApiError(
+          response.errcode,
+          String(response.errmsg ?? ""),
+          "WeCom proactive send failed",
+        );
       }
     },
-    params.retry,
+    params.retryOpts,
   );
 }
 
@@ -301,7 +309,7 @@ export async function sendWecomWsProactiveMarkdown(params: {
   accountId: string;
   to: string;
   content: string;
-  retry?: WecomRetryConfig;
+  retryOpts?: WecomRetryOptions;
 }): Promise<void> {
   await sendWecomWsProactiveCommand({
     accountId: params.accountId,
@@ -312,7 +320,7 @@ export async function sendWecomWsProactiveMarkdown(params: {
         content: params.content,
       },
     },
-    retry: params.retry,
+    retryOpts: params.retryOpts,
   });
 }
 
@@ -320,7 +328,7 @@ export async function sendWecomWsProactiveTemplateCard(params: {
   accountId: string;
   to: string;
   templateCard: Record<string, unknown>;
-  retry?: WecomRetryConfig;
+  retryOpts?: WecomRetryOptions;
 }): Promise<void> {
   await sendWecomWsProactiveCommand({
     accountId: params.accountId,
@@ -329,7 +337,7 @@ export async function sendWecomWsProactiveTemplateCard(params: {
       msgtype: "template_card",
       template_card: params.templateCard as SendMsgBody extends { template_card: infer T } ? T : never,
     },
-    retry: params.retry,
+    retryOpts: params.retryOpts,
   });
 }
 
@@ -338,7 +346,7 @@ export async function uploadWecomWsLocalMedia(params: {
   filePath: string;
   mediaType: WecomWsNativeMediaType;
   filename?: string;
-  retry?: WecomRetryConfig;
+  retryOpts?: WecomRetryOptions;
 }): Promise<{ mediaId: string; createdAt?: number }> {
   const client = requireActiveClient(params.accountId);
   const sourcePath = params.filePath.trim();
@@ -363,7 +371,7 @@ export async function uploadWecomWsLocalMedia(params: {
         createdAt: typeof result.created_at === "number" ? result.created_at : undefined,
       };
     },
-    params.retry,
+    params.retryOpts,
   );
 }
 
@@ -385,7 +393,7 @@ export async function sendWecomWsProactiveMedia(params: {
   to: string;
   mediaType: WecomWsNativeMediaType;
   mediaId: string;
-  retry?: WecomRetryConfig;
+  retryOpts?: WecomRetryOptions;
 }): Promise<void> {
   const activated = getActivatedTarget(params.accountId, params.to);
   if (!activated) {
@@ -403,10 +411,14 @@ export async function sendWecomWsProactiveMedia(params: {
     async () => {
       const response = await client.sendMediaMessage(activated.chatId, params.mediaType, mediaId);
       if (typeof response.errcode === "number" && response.errcode !== 0) {
-        throw new Error(`WeCom proactive media send failed: ${response.errcode} ${response.errmsg ?? ""}`.trim());
+        throw new WecomApiError(
+          response.errcode,
+          String(response.errmsg ?? ""),
+          "WeCom proactive media send failed",
+        );
       }
     },
-    params.retry,
+    params.retryOpts,
   );
 }
 
@@ -514,7 +526,7 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
             client,
             frame: replyFrame,
             logger,
-            retry: account.retry,
+            retryOpts: { config: account.retry, signal: abortSignal, log: logger.info.bind(logger) },
           });
           setStatus?.({
             accountId: account.accountId,
@@ -673,7 +685,7 @@ export async function startWecomWsGateway(opts: StartWecomWsGatewayOptions): Pro
               client,
               frame: replyFrame,
               logger,
-              retry: account.retry,
+              retryOpts: { config: account.retry, signal: abortSignal, log: logger.info.bind(logger) },
             });
             setStatus?.({
               accountId: account.accountId,

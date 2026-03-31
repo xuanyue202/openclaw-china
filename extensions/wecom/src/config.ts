@@ -18,6 +18,7 @@ export const DEFAULT_WECOM_WS_URL = "wss://openws.work.weixin.qq.com";
 export const DEFAULT_WECOM_WS_HEARTBEAT_MS = 30_000;
 export const DEFAULT_WECOM_WS_RECONNECT_INITIAL_MS = 1_000;
 export const DEFAULT_WECOM_WS_RECONNECT_MAX_MS = 30_000;
+export const DEFAULT_WECOM_TEXT_CHUNK_LIMIT = 500;
 
 const WecomAccountSchema = z.object({
   name: z.string().optional(),
@@ -47,6 +48,7 @@ const WecomAccountSchema = z.object({
     maxDelayMs: z.number().int().positive().optional(),
     jitter: z.number().min(0).max(1).optional(),
   }).optional(),
+  textChunkLimit: z.number().int().positive().optional(),
 });
 
 export const WecomConfigSchema = WecomAccountSchema.extend({
@@ -92,6 +94,7 @@ export const WecomConfigJsonSchema = {
           jitter: { type: "number", minimum: 0, maximum: 1 },
         },
       },
+      textChunkLimit: { type: "integer", minimum: 1 },
       defaultAccount: { type: "string" },
       accounts: {
         type: "object",
@@ -129,7 +132,8 @@ export const WecomConfigJsonSchema = {
                 maxDelayMs: { type: "integer", minimum: 1 },
                 jitter: { type: "number", minimum: 0, maximum: 1 },
               },
-            }
+            },
+            textChunkLimit: { type: "integer", minimum: 1 }
           }
         }
       }
@@ -224,6 +228,7 @@ export function resolveWecomAccount(params: { cfg: PluginConfig; accountId?: str
     ...DEFAULT_RETRY_CONFIG,
     ...merged.retry,
   };
+  const textChunkLimit = merged.textChunkLimit ?? DEFAULT_WECOM_TEXT_CHUNK_LIMIT;
 
   return {
     accountId,
@@ -243,6 +248,7 @@ export function resolveWecomAccount(params: { cfg: PluginConfig; accountId?: str
     publicBaseUrl,
     wsImageReplyMode,
     retry,
+    textChunkLimit,
     config: merged,
   };
 }

@@ -44,7 +44,7 @@ import {
   stopWecomWsGatewayForAccount,
   uploadWecomWsLocalMedia,
 } from "./ws-gateway.js";
-import { withWecomRetry } from "./retry.js";
+import { withWecomRetry, type WecomRetryOptions } from "./retry.js";
 
 // =============================================================================
 // Message Action Adapter Types and Helpers (OpenClaw 3.22+)
@@ -372,7 +372,7 @@ async function appendActiveReply(params: {
 async function postWecomResponse(
   responseUrl: string,
   payload: unknown,
-  retry?: import("./types.js").WecomRetryConfig,
+  retryOpts?: WecomRetryOptions,
 ): Promise<void> {
   const body = JSON.stringify(payload);
   await withWecomRetry(
@@ -392,13 +392,82 @@ async function postWecomResponse(
         throw err;
       }
     },
-    retry,
+    retryOpts,
   );
 }
 
 function formatError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * 将长文本拆分为不超过 limit 字符的多条消息。
+ *
+ * 企业微信单条文本消息在约 800 字符时会被截断，
+ * 框架层面在发送前自动拆分，避免让大模型处理消息分片。
+ *
+ * 拆分策略（优先保留语义完整性）：
+ * 1. 先按双换行（段落）拆分
+ * 2. 段落仍超长则按单换行拆分
+ * 3. 行仍超长则按字符硬切
+ */
+export function splitTextChunks(text: string, limit: number): string[] {
+  if (!text || limit <= 0) return text ? [text] : [];
+  if (text.length <= limit) return [text];
+
+  const chunks: string[] = [];
+  let current = "";
+
+  const paragraphs = text.split(/\n\n/);
+
+  for (const para of paragraphs) {
+    const segment = current ? `\n\n${para}` : para;
+
+    if ((current + segment).length <= limit) {
+      current += segment;
+      continue;
+    }
+
+    // 当前累积的内容先保存
+    if (current.trim()) {
+      chunks.push(current);
+      current = "";
+    }
+
+    // 段落本身就超长，按行拆
+    if (para.length > limit) {
+      const lines = para.split(/\n/);
+      for (const line of lines) {
+        if ((current ? current + "\n" + line : line).length <= limit) {
+          current = current ? current + "\n" + line : line;
+          continue;
+        }
+        if (current.trim()) {
+          chunks.push(current);
+          current = "";
+        }
+        // 单行也超长，硬切
+        if (line.length > limit) {
+          let pos = 0;
+          while (pos < line.length) {
+            chunks.push(line.slice(pos, pos + limit));
+            pos += limit;
+          }
+        } else {
+          current = line;
+        }
+      }
+    } else {
+      current = para;
+    }
+  }
+
+  if (current.trim()) {
+    chunks.push(current);
+  }
+
+  return chunks;
 }
 
 const meta = {
@@ -682,12 +751,15 @@ export const wecomPlugin = {
       }
       if (account.mode === "ws") {
         try {
-          await sendWecomWsProactiveMarkdown({
-            accountId: account.accountId,
-            to: replyTarget,
-            content: params.text,
-            retry: account.retry,
-          });
+          const textChunks = splitTextChunks(params.text, account.textChunkLimit);
+          for (const chunk of textChunks) {
+            await sendWecomWsProactiveMarkdown({
+              accountId: account.accountId,
+              to: replyTarget,
+              content: chunk,
+              retryOpts: { config: account.retry },
+            });
+          }
           return {
             channel: "wecom",
             ok: true,
@@ -772,7 +844,7 @@ export const wecomPlugin = {
             filePath: localPath,
             filename: path.basename(localPath),
             mediaType: localNativeMediaType,
-            retry: account.retry,
+            retryOpts: { config: account.retry },
           });
           const caption = params.text?.trim();
           const captionAccepted = caption
@@ -807,14 +879,14 @@ export const wecomPlugin = {
             to: replyTarget,
             mediaType: localNativeMediaType,
             mediaId: uploaded.mediaId,
-            retry: account.retry,
+            retryOpts: { config: account.retry },
           });
           if (caption && !captionAccepted) {
             await sendWecomWsProactiveMarkdown({
               accountId: account.accountId,
               to: replyTarget,
               content: caption,
-              retry: account.retry,
+              retryOpts: { config: account.retry },
             });
           }
           console.log(
@@ -879,7 +951,7 @@ export const wecomPlugin = {
             accountId: account.accountId,
             to: replyTarget,
             content: markdown,
-            retry: account.retry,
+            retryOpts: { config: account.retry },
           });
           return {
             channel: "wecom",
@@ -963,7 +1035,7 @@ export const wecomPlugin = {
             accountId: account.accountId,
             to: replyTarget,
             templateCard: params.templateCard ?? {},
-            retry: account.retry,
+            retryOpts: { config: account.retry },
           });
           return {
             channel: "wecom",
@@ -1003,7 +1075,7 @@ export const wecomPlugin = {
         await postWecomResponse(responseUrl, {
           msgtype: "template_card",
           template_card: params.templateCard ?? {},
-        }, account.retry);
+        }, { config: account.retry });
         return {
           channel: "wecom",
           ok: true,

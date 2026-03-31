@@ -42,6 +42,9 @@ export type WecomAccountConfig = {
   requireMention?: boolean;
 
   retry?: WecomRetryConfig;
+
+  /** 单条消息最大字符数，超过后自动拆分，默认 500 */
+  textChunkLimit?: number;
 };
 
 export type WecomConfig = WecomAccountConfig & {
@@ -67,6 +70,7 @@ export type ResolvedWecomAccount = {
   publicBaseUrl?: string;
   wsImageReplyMode: WecomWsImageReplyMode;
   retry: Required<WecomRetryConfig>;
+  textChunkLimit: number;
   config: WecomAccountConfig;
 };
 
