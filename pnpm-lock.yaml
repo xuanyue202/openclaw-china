@@ -208,8 +208,8 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.7)
       zod:
-        specifier: ^3.23.0
-        version: 3.25.76
+        specifier: ^3.24.4
+        version: 3.24.4
 
   extensions/wecom-kf:
     dependencies:
@@ -1489,6 +1489,9 @@ packages:
       utf-8-validate:
         optional: true
 
+  zod@3.24.4:
+    resolution: {integrity: sha512-OdqJE9UDRPwWsrHjLN2F8bPxvwJBK22EHLWtanu0LSYr5YqzsaaW3RMgmjwr8Rypg5k+meEJdSPXJZXE/yqOMg==}
+
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
@@ -2508,5 +2511,7 @@ snapshots:
       stackback: 0.0.2
 
   ws@8.19.0: {}
+
+  zod@3.24.4: {}
 
   zod@3.25.76: {}

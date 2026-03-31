@@ -2,7 +2,7 @@ import { resolveAllowFrom, resolveWechatMpASRCredentials } from "./config.js";
 import { updateAccountState } from "./state.js";
 import { normalizeWechatMpText, resolveRenderMarkdown } from "./text.js";
 import { downloadWechatMpMedia } from "./api.js";
-import { transcribeTencentFlash, ASRError } from "@openclaw-china/shared";
+import { transcribeTencentFlash, ASRError } from "@xuanyue202/shared";
 import type {
   PluginConfig,
   PluginRuntime,

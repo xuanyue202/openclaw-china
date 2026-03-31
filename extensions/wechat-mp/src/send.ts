@@ -21,7 +21,7 @@ import type {
   TimeWindowConfig,
   SendCapabilityResult,
 } from "./types.js";
-import { withRetry } from "@openclaw-china/shared";
+import { withRetry } from "@xuanyue202/shared";
 import {
   getLastInteractionTime,
   getInteractionWindowExpiry,
