@@ -44,6 +44,7 @@ import {
   stopWecomWsGatewayForAccount,
   uploadWecomWsLocalMedia,
 } from "./ws-gateway.js";
+import { withWecomRetry } from "./retry.js";
 
 // =============================================================================
 // Message Action Adapter Types and Helpers (OpenClaw 3.22+)
@@ -368,19 +369,31 @@ async function appendActiveReply(params: {
   };
 }
 
-async function postWecomResponse(responseUrl: string, payload: unknown): Promise<void> {
+async function postWecomResponse(
+  responseUrl: string,
+  payload: unknown,
+  retry?: import("./types.js").WecomRetryConfig,
+): Promise<void> {
   const body = JSON.stringify(payload);
-  const response = await fetch(responseUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
+  await withWecomRetry(
+    "response_url send",
+    async () => {
+      const response = await fetch(responseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body,
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        const err = new Error(`WeCom response_url send failed: HTTP ${response.status} ${text}`.trim());
+        (err as unknown as Record<string, unknown>).status = response.status;
+        throw err;
+      }
     },
-    body,
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`WeCom response_url send failed: HTTP ${response.status} ${text}`.trim());
-  }
+    retry,
+  );
 }
 
 function formatError(err: unknown): string {
@@ -673,6 +686,7 @@ export const wecomPlugin = {
             accountId: account.accountId,
             to: replyTarget,
             content: params.text,
+            retry: account.retry,
           });
           return {
             channel: "wecom",
@@ -758,6 +772,7 @@ export const wecomPlugin = {
             filePath: localPath,
             filename: path.basename(localPath),
             mediaType: localNativeMediaType,
+            retry: account.retry,
           });
           const caption = params.text?.trim();
           const captionAccepted = caption
@@ -792,12 +807,14 @@ export const wecomPlugin = {
             to: replyTarget,
             mediaType: localNativeMediaType,
             mediaId: uploaded.mediaId,
+            retry: account.retry,
           });
           if (caption && !captionAccepted) {
             await sendWecomWsProactiveMarkdown({
               accountId: account.accountId,
               to: replyTarget,
               content: caption,
+              retry: account.retry,
             });
           }
           console.log(
@@ -862,6 +879,7 @@ export const wecomPlugin = {
             accountId: account.accountId,
             to: replyTarget,
             content: markdown,
+            retry: account.retry,
           });
           return {
             channel: "wecom",
@@ -945,6 +963,7 @@ export const wecomPlugin = {
             accountId: account.accountId,
             to: replyTarget,
             templateCard: params.templateCard ?? {},
+            retry: account.retry,
           });
           return {
             channel: "wecom",
@@ -984,7 +1003,7 @@ export const wecomPlugin = {
         await postWecomResponse(responseUrl, {
           msgtype: "template_card",
           template_card: params.templateCard ?? {},
-        });
+        }, account.retry);
         return {
           channel: "wecom",
           ok: true,

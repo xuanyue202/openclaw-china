@@ -3,6 +3,17 @@ export type WecomGroupPolicy = "open" | "allowlist" | "disabled";
 export type WecomTransportMode = "webhook" | "ws";
 export type WecomWsImageReplyMode = "native" | "markdown-url";
 
+export type WecomRetryConfig = {
+  /** 最大重试次数，默认 3 */
+  attempts?: number;
+  /** 最小退避延迟(ms)，默认 400 */
+  minDelayMs?: number;
+  /** 最大退避延迟(ms)，封顶，默认 30000 */
+  maxDelayMs?: number;
+  /** 随机抖动比例（0-1），防多实例同时重试，默认 0.1 */
+  jitter?: number;
+};
+
 export type WecomAccountConfig = {
   name?: string;
   enabled?: boolean;
@@ -29,6 +40,8 @@ export type WecomAccountConfig = {
   groupPolicy?: WecomGroupPolicy;
   groupAllowFrom?: string[];
   requireMention?: boolean;
+
+  retry?: WecomRetryConfig;
 };
 
 export type WecomConfig = WecomAccountConfig & {
@@ -53,6 +66,7 @@ export type ResolvedWecomAccount = {
   reconnectMaxDelayMs: number;
   publicBaseUrl?: string;
   wsImageReplyMode: WecomWsImageReplyMode;
+  retry: Required<WecomRetryConfig>;
   config: WecomAccountConfig;
 };
 

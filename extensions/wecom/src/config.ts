@@ -10,6 +10,7 @@ import type {
   WecomTransportMode,
   WecomWsImageReplyMode,
 } from "./types.js";
+import { DEFAULT_RETRY_CONFIG } from "./retry.js";
 
 /** 默认账户 ID */
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -40,6 +41,12 @@ const WecomAccountSchema = z.object({
   groupPolicy: z.enum(["open", "allowlist", "disabled"]).optional(),
   groupAllowFrom: z.array(z.string()).optional(),
   requireMention: z.boolean().optional(),
+  retry: z.object({
+    attempts: z.number().int().min(0).optional(),
+    minDelayMs: z.number().int().positive().optional(),
+    maxDelayMs: z.number().int().positive().optional(),
+    jitter: z.number().min(0).max(1).optional(),
+  }).optional(),
 });
 
 export const WecomConfigSchema = WecomAccountSchema.extend({
@@ -75,6 +82,16 @@ export const WecomConfigJsonSchema = {
       groupPolicy: { type: "string", enum: ["open", "allowlist", "disabled"] },
       groupAllowFrom: { type: "array", items: { type: "string" } },
       requireMention: { type: "boolean" },
+      retry: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          attempts: { type: "integer", minimum: 0 },
+          minDelayMs: { type: "integer", minimum: 1 },
+          maxDelayMs: { type: "integer", minimum: 1 },
+          jitter: { type: "number", minimum: 0, maximum: 1 },
+        },
+      },
       defaultAccount: { type: "string" },
       accounts: {
         type: "object",
@@ -102,7 +119,17 @@ export const WecomConfigJsonSchema = {
             allowFrom: { type: "array", items: { type: "string" } },
             groupPolicy: { type: "string", enum: ["open", "allowlist", "disabled"] },
             groupAllowFrom: { type: "array", items: { type: "string" } },
-            requireMention: { type: "boolean" }
+            requireMention: { type: "boolean" },
+            retry: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                attempts: { type: "integer", minimum: 0 },
+                minDelayMs: { type: "integer", minimum: 1 },
+                maxDelayMs: { type: "integer", minimum: 1 },
+                jitter: { type: "number", minimum: 0, maximum: 1 },
+              },
+            }
           }
         }
       }
@@ -193,6 +220,10 @@ export function resolveWecomAccount(params: { cfg: PluginConfig; accountId?: str
   const reconnectInitialDelayMs = merged.reconnectInitialDelayMs ?? DEFAULT_WECOM_WS_RECONNECT_INITIAL_MS;
   const reconnectMaxDelayMs = merged.reconnectMaxDelayMs ?? DEFAULT_WECOM_WS_RECONNECT_MAX_MS;
   const configured = mode === "ws" ? Boolean(botId && secret) : Boolean(token && encodingAESKey);
+  const retry = {
+    ...DEFAULT_RETRY_CONFIG,
+    ...merged.retry,
+  };
 
   return {
     accountId,
@@ -211,6 +242,7 @@ export function resolveWecomAccount(params: { cfg: PluginConfig; accountId?: str
     reconnectMaxDelayMs,
     publicBaseUrl,
     wsImageReplyMode,
+    retry,
     config: merged,
   };
 }
