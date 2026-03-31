@@ -106,4 +106,65 @@ describe("splitTextChunks", () => {
     expect(splitTextChunks("abc", 0)).toEqual(["abc"]);
     expect(splitTextChunks("abc", -1)).toEqual(["abc"]);
   });
+
+  // --- 标点句子边界拆分 ---
+
+  it("splits long line at Chinese sentence-ending punctuation", () => {
+    // 3 sentences, each ~20 chars
+    const s1 = "这是第一句话大约二十字。";
+    const s2 = "这是第二句话也差不多长！";
+    const s3 = "第三句话问一个问题好吗？";
+    const line = s1 + s2 + s3;
+    // limit allows 2 sentences but not 3
+    const chunks = splitTextChunks(line, 30);
+    // Should split at punctuation, not hard cut
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(30);
+    }
+    // Content preserved
+    expect(chunks.join("")).toBe(line);
+  });
+
+  it("splits long line at English sentence-ending punctuation", () => {
+    const s1 = "This is sentence one. ";
+    const s2 = "This is sentence two. ";
+    const s3 = "And sentence three!";
+    const line = s1 + s2 + s3;
+    const chunks = splitTextChunks(line, 45);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(45);
+    }
+    expect(chunks.join("")).toBe(line);
+  });
+
+  it("splits at semicolons and ellipsis", () => {
+    const line = "第一部分；第二部分很长的内容……第三部分也不短哦";
+    const chunks = splitTextChunks(line, 15);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(15);
+    }
+    expect(chunks.join("")).toBe(line);
+  });
+
+  it("falls back to hard cut when no punctuation in long line", () => {
+    // No punctuation at all
+    const text = "abcdefghij".repeat(10); // 100 chars
+    const chunks = splitTextChunks(text, 30);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(30);
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("prefers punctuation break even near the end of window", () => {
+    // Punctuation at position 18, limit 20, then more text
+    const line = "一二三四五六七八九。" + "零".repeat(30);
+    const chunks = splitTextChunks(line, 20);
+    // First chunk should end at the period, not hard-cut at 20
+    expect(chunks[0]).toBe("一二三四五六七八九。");
+    expect(chunks.join("")).toBe(line);
+  });
 });

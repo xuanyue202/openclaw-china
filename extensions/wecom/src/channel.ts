@@ -402,6 +402,48 @@ function formatError(err: unknown): string {
 }
 
 /**
+ * 中英文句末标点（含句号、感叹号、问号、省略号、分号等）
+ * 用于在标点后切分长行，保持句子完整性。
+ */
+const SENTENCE_END_RE = /[。！？；…\u2026.!?;]+/g;
+
+/**
+ * 按句子标点边界拆分超长行。
+ *
+ * 在 limit 范围内找到最后一个句末标点的位置，在其之后切分。
+ * 如果找不到标点边界则回退到硬切。
+ */
+function splitLineBySentence(line: string, limit: number): string[] {
+  if (line.length <= limit) return [line];
+
+  const chunks: string[] = [];
+  let remaining = line;
+
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit);
+    // 在窗口内找最后一个句末标点
+    let lastBreak = -1;
+    SENTENCE_END_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = SENTENCE_END_RE.exec(window)) !== null) {
+      lastBreak = match.index + match[0].length;
+    }
+    if (lastBreak > 0) {
+      chunks.push(remaining.slice(0, lastBreak));
+      remaining = remaining.slice(lastBreak);
+    } else {
+      // 无标点可切，硬切
+      chunks.push(remaining.slice(0, limit));
+      remaining = remaining.slice(limit);
+    }
+  }
+  if (remaining) {
+    chunks.push(remaining);
+  }
+  return chunks;
+}
+
+/**
  * 将长文本拆分为不超过 limit 字符的多条消息。
  *
  * 企业微信单条文本消息在约 800 字符时会被截断，
@@ -410,7 +452,8 @@ function formatError(err: unknown): string {
  * 拆分策略（优先保留语义完整性）：
  * 1. 先按双换行（段落）拆分
  * 2. 段落仍超长则按单换行拆分
- * 3. 行仍超长则按字符硬切
+ * 3. 行仍超长则按句末标点拆分
+ * 4. 无标点可切时按字符硬切
  */
 export function splitTextChunks(text: string, limit: number): string[] {
   if (!text || limit <= 0) return text ? [text] : [];
@@ -447,13 +490,14 @@ export function splitTextChunks(text: string, limit: number): string[] {
           chunks.push(current);
           current = "";
         }
-        // 单行也超长，硬切
+        // 单行也超长，按句子标点拆分（回退到硬切）
         if (line.length > limit) {
-          let pos = 0;
-          while (pos < line.length) {
-            chunks.push(line.slice(pos, pos + limit));
-            pos += limit;
+          const parts = splitLineBySentence(line, limit);
+          // 最后一个 part 可能还能和后续内容合并
+          for (let i = 0; i < parts.length - 1; i++) {
+            chunks.push(parts[i]);
           }
+          current = parts[parts.length - 1];
         } else {
           current = line;
         }
