@@ -61,6 +61,16 @@ export type WecomAppAccountConfig = {
     prefer?: "amr";
   };
 
+  /** HTTP 请求重试配置 */
+  retry?: {
+    /** 最大重试次数（默认 3） */
+    attempts?: number;
+    /** 初始延迟毫秒（默认 400） */
+    minDelayMs?: number;
+    /** 最大延迟毫秒（默认 30000） */
+    maxDelayMs?: number;
+  };
+
   /**
    * 入站语音 ASR 配置（腾讯云录音文件识别极速版）
    */

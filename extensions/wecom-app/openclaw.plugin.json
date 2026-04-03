@@ -18,6 +18,14 @@
       "token": { "type": "string" },
       "encodingAESKey": { "type": "string" },
       "receiveId": { "type": "string" },
+      "retry": {
+        "type": "object",
+        "properties": {
+          "attempts": { "type": "number" },
+          "minDelayMs": { "type": "number" },
+          "maxDelayMs": { "type": "number" }
+        }
+      },
       "asr": {
         "type": "object",
         "additionalProperties": false,
@@ -53,6 +61,14 @@
             "token": { "type": "string" },
             "encodingAESKey": { "type": "string" },
             "receiveId": { "type": "string" },
+            "retry": {
+              "type": "object",
+              "properties": {
+                "attempts": { "type": "number" },
+                "minDelayMs": { "type": "number" },
+                "maxDelayMs": { "type": "number" }
+              }
+            },
             "asr": {
               "type": "object",
               "additionalProperties": false,

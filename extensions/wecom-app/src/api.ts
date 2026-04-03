@@ -3,12 +3,13 @@
  * 
  * 提供 Access Token 缓存和主动发送消息能力
  */
-import type { ResolvedWecomAppAccount, WecomAppSendTarget, AccessTokenCacheEntry } from "./types.js";
+import type { ResolvedWecomAppAccount, WecomAppSendTarget, AccessTokenCacheEntry, WecomAppAccountConfig } from "./types.js";
 import {
   resolveInboundMediaDir,
   resolveInboundMediaKeepDays,
   resolveApiBaseUrl,
 } from "./config.js";
+import { withRetry, type RetryOptions } from "@xuanyue202/shared";
 import { isWsRelayOutboundActive, sendViaWsRelay, getWsRelayMediaProxy } from "./ws-relay-client.js";
 import https from "node:https";
 import { mkdir, writeFile, unlink, rename, copyFile, readdir, stat, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -19,6 +20,27 @@ import { resolveWecomVoiceSourceExtension, shouldTranscodeWecomVoice } from "./v
 
 /** 下载超时时间（毫秒） */
 const DOWNLOAD_TIMEOUT = 120_000;
+
+/** 将插件 retry 配置映射为 withRetry 的 RetryOptions */
+function resolveRetryOptions(retry?: WecomAppAccountConfig["retry"]): RetryOptions | undefined {
+  if (!retry) return undefined;
+  return {
+    maxRetries: retry.attempts ?? 3,
+    initialDelay: retry.minDelayMs ?? 400,
+    maxDelay: retry.maxDelayMs ?? 30_000,
+  };
+}
+
+/** 带重试的 fetch —— 当 account 配置了 retry 时自动包装 */
+function fetchWithRetry(
+  account: ResolvedWecomAppAccount,
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
+  const retryOpts = resolveRetryOptions(account.config.retry);
+  if (!retryOpts) return fetch(input, init);
+  return withRetry(() => fetch(input, init), retryOpts);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 入站媒体：产品级存储策略
@@ -310,7 +332,7 @@ export async function getAccessToken(account: ResolvedWecomAppAccount): Promise<
     account,
     `/cgi-bin/gettoken?corpid=${encodeURIComponent(account.corpId)}&corpsecret=${encodeURIComponent(account.corpSecret)}`
   );
-  const resp = await fetch(url);
+  const resp = await fetchWithRetry(account, url);
   const data = (await resp.json()) as { errcode?: number; errmsg?: string; access_token?: string };
 
   if (data.errcode !== undefined && data.errcode !== 0) {
@@ -672,7 +694,8 @@ export async function sendWecomAppMessage(
   // 注意：企业微信 API 要求 access_token 作为查询参数传递。
   // 这可能会在服务器日志、浏览器历史和引用头中暴露令牌。
   // 确保任何记录此 URL 的日志都隐藏 access_token 参数。
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`),
     {
       method: "POST",
@@ -731,7 +754,8 @@ export async function sendWecomAppMarkdownMessage(
     touser: target.userId,
   };
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`),
     {
       method: "POST",
@@ -845,7 +869,8 @@ export async function uploadImageMedia(
   const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
   const body = Buffer.concat([header, imageBuffer, footer]);
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/media/upload?access_token=${encodeURIComponent(token)}&type=image`),
     {
       method: "POST",
@@ -897,7 +922,8 @@ export async function sendWecomAppImageMessage(
     touser: target.userId,
   };
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`),
     {
       method: "POST",
@@ -1027,7 +1053,8 @@ export async function uploadVoiceMedia(
   const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
   const body = Buffer.concat([header, voiceBuffer, footer]);
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/media/upload?access_token=${encodeURIComponent(token)}&type=voice`),
     {
       method: "POST",
@@ -1079,7 +1106,8 @@ export async function sendWecomAppVoiceMessage(
     touser: target.userId,
   };
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`),
     {
       method: "POST",
@@ -1327,7 +1355,8 @@ export async function uploadMedia(
   const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
   const body = Buffer.concat([header, buffer, footer]);
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/media/upload?access_token=${encodeURIComponent(token)}&type=${type}`),
     {
       method: "POST",
@@ -1380,7 +1409,8 @@ export async function sendWecomAppFileMessage(
     touser: target.userId,
   };
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`),
     {
       method: "POST",
@@ -1430,7 +1460,8 @@ export async function sendWecomAppVideoMessage(
     touser: target.userId,
   };
 
-  const resp = await fetch(
+  const resp = await fetchWithRetry(
+    account,
     buildWecomApiUrl(account, `/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`),
     {
       method: "POST",

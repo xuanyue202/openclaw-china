@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
 
-import { createLogger, type Logger } from "@xuanyue202/shared";
+import { createLogger, withRetry, type Logger } from "@xuanyue202/shared";
 
 import type { ResolvedWecomAppAccount, WecomAppInboundMessage } from "./types.js";
 import type { PluginConfig } from "./config.js";
@@ -58,6 +58,64 @@ const STREAM_TTL_MS = 10 * 60 * 1000;
 const STREAM_MAX_BYTES = 512_000;
 /** 等待时间：5秒是企业微信最大响应时间，用于累积足够内容 */
 const INITIAL_STREAM_WAIT_MS = 5000;
+
+/**
+ * 判断 LLM dispatch 错误是否可重试
+ * 重点覆盖 overload、rate limit、网络瞬时错误
+ */
+function shouldRetryDispatch(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  // 主动取消不重试
+  if (error.name === "AbortError") return false;
+
+  // 检查 HTTP 状态码（LLM SDK 通常挂在 error.status）
+  const status = (error as { status?: number }).status
+    ?? (error as { statusCode?: number }).statusCode;
+  if (typeof status === "number") {
+    // 429 rate limit, 503 service unavailable, 529 overloaded
+    if (status === 429 || status === 503 || status === 529) return true;
+    // 其余 5xx
+    if (status >= 500 && status < 600) return true;
+    // 4xx 非 429 → 不重试（参数错误、鉴权失败等）
+    if (status >= 400 && status < 500) return false;
+  }
+
+  // 检查错误名称（Anthropic/OpenAI SDK 错误类名）
+  const name = error.name.toLowerCase();
+  if (
+    name.includes("overloaded") ||
+    name.includes("ratelimit") ||
+    name.includes("rate_limit") ||
+    name.includes("internalserver") ||
+    name.includes("serviceunavailable")
+  ) return true;
+
+  // 检查消息关键词
+  const msg = error.message.toLowerCase();
+  if (
+    msg.includes("overloaded") ||
+    msg.includes("rate limit") ||
+    msg.includes("rate_limit") ||
+    msg.includes("too many request") ||
+    msg.includes("capacity") ||
+    msg.includes("temporarily unavailable") ||
+    msg.includes("service unavailable")
+  ) return true;
+
+  // 网络 / 超时类错误
+  if (
+    name === "typeerror" ||
+    name === "timeouterror" ||
+    msg.includes("fetch failed") ||
+    msg.includes("econnreset") ||
+    msg.includes("econnrefused") ||
+    msg.includes("socket hang up") ||
+    msg.includes("timeout") ||
+    msg.includes("connection reset")
+  ) return true;
+
+  return false;
+}
 
 function normalizeWebhookPath(raw: string): string {
   const trimmed = raw.trim();
@@ -719,7 +777,6 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
     const state = streams.get(streamId);
     if (state) state.started = true;
     let chunkFlush = Promise.resolve();
-    let activeChunkCount = 0;
 
     const markStreamFinished = async (err?: unknown): Promise<void> => {
       await chunkFlush.catch(() => undefined);
@@ -732,10 +789,10 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
       current.finished = true;
       current.updatedAt = Date.now();
 
+      // 流结束后，将完整累积内容按 2048 字节拆分后主动发送
       if (
         target.account.canSendActive &&
         activeTarget &&
-        activeChunkCount === 0 &&
         current.content.trim()
       ) {
         try {
@@ -763,24 +820,6 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
 
           appendStreamContent(current, text);
           target.statusSink?.({ lastOutboundAt: Date.now() });
-
-          if (!target.account.canSendActive || !activeTarget) {
-            return;
-          }
-
-          try {
-            const chunks = splitActiveTextChunks(text);
-            for (const chunk of chunks) {
-              const result = await sendWecomAppMessage(target.account, activeTarget, chunk);
-              if (!result.ok) {
-                throw new Error(result.errmsg || "unknown wecom-app send failure");
-              }
-              activeChunkCount += 1;
-              target.statusSink?.({ lastOutboundAt: Date.now() });
-            }
-          } catch (sendErr) {
-            logger.error(`主动分片发送失败: ${String(sendErr)}`);
-          }
         });
         return chunkFlush;
       },
@@ -798,15 +837,43 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
     };
 
     // 启动消息处理（异步，不阻塞 HTTP 响应）
-    dispatchWecomAppMessage({
-      cfg: target.config,
-      account: target.account,
-      msg,
-      core,
-      hooks,
-      log: target.runtime.log,
-      error: target.runtime.error,
-    })
+    // 读取 retry 配置，用于大模型 dispatch 重试（overload / rate limit / 网络瞬时错误）
+    const retryCfg = target.account.config.retry;
+    const doDispatch = () =>
+      dispatchWecomAppMessage({
+        cfg: target.config,
+        account: target.account,
+        msg,
+        core,
+        hooks,
+        log: target.runtime.log,
+        error: target.runtime.error,
+      });
+
+    const dispatchWithRetry = retryCfg
+      ? () => {
+          return withRetry(
+            () => {
+              // 每次重试前清空已累积的流内容，避免重复
+              const s = streams.get(streamId);
+              if (s) {
+                s.content = "";
+                s.error = undefined;
+                s.updatedAt = Date.now();
+              }
+              return doDispatch();
+            },
+            {
+              maxRetries: retryCfg.attempts ?? 3,
+              initialDelay: retryCfg.minDelayMs ?? 1000,
+              maxDelay: retryCfg.maxDelayMs ?? 30_000,
+              shouldRetry: shouldRetryDispatch,
+            },
+          );
+        }
+      : doDispatch;
+
+    dispatchWithRetry()
       .then(() => {
         void markStreamFinished();
       })

@@ -52,6 +52,14 @@ const WecomAppAccountSchema = z.object({
       prefer: z.enum(["amr"]).optional(),
     })
     .optional(),
+  retry: z
+    .object({
+      attempts: z.number().int().positive().optional(),
+      minDelayMs: z.number().positive().optional(),
+      maxDelayMs: z.number().positive().optional(),
+    })
+    .optional(),
+
   asr: z
     .object({
       enabled: z.boolean().optional(),
@@ -122,6 +130,14 @@ export const WecomAppConfigJsonSchema = {
           prefer: { type: "string", enum: ["amr"] },
         },
       },
+      retry: {
+        type: "object",
+        properties: {
+          attempts: { type: "number" },
+          minDelayMs: { type: "number" },
+          maxDelayMs: { type: "number" },
+        },
+      },
       asr: {
         type: "object",
         additionalProperties: false,
@@ -176,6 +192,14 @@ export const WecomAppConfigJsonSchema = {
               properties: {
                 enabled: { type: "boolean" },
                 prefer: { type: "string", enum: ["amr"] },
+              },
+            },
+            retry: {
+              type: "object",
+              properties: {
+                attempts: { type: "number" },
+                minDelayMs: { type: "number" },
+                maxDelayMs: { type: "number" },
               },
             },
             asr: {

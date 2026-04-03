@@ -123,7 +123,7 @@ afterEach(() => {
 });
 
 describe("wecom-app active stream delivery", () => {
-  it("actively sends each chunk as soon as it arrives", async () => {
+  it("accumulates chunks and sends consolidated content after stream finishes", async () => {
     const secondChunkGate = createDeferred();
 
     setWecomAppRuntime(buildRuntime(async ({ dispatcherOptions }) => {
@@ -177,30 +177,92 @@ describe("wecom-app active stream delivery", () => {
       expect(handled).toBe(true);
       expect(recorder.getBody()).toContain("\"encrypt\"");
 
-      await vi.waitFor(() => {
-        expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(1);
-      });
-      expect(sendWecomAppMessageMock).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ accountId: "app" }),
-        { userId: "user1" },
-        "first verbose block"
-      );
+      // 流式期间不发送，只累积
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(0);
 
+      // 释放第二个 chunk，让流结束
       secondChunkGate.resolve();
 
+      // markStreamFinished 后，完整内容被拆分后一次性发送
       await vi.waitFor(() => {
-        expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(2);
+        expect(sendWecomAppMessageMock).toHaveBeenCalled();
       });
-      expect(sendWecomAppMessageMock).toHaveBeenNthCalledWith(
-        2,
+      expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(1);
+      expect(sendWecomAppMessageMock).toHaveBeenCalledWith(
         expect.objectContaining({ accountId: "app" }),
         { userId: "user1" },
-        "second verbose block"
+        "first verbose block\n\nsecond verbose block"
       );
+    } finally {
+      unregister();
+    }
+  });
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(2);
+  it("splits long accumulated content into 2048-byte chunks", async () => {
+    // 生成超过 2048 字节的内容
+    const longChunk1 = "A".repeat(1500);
+    const longChunk2 = "B".repeat(1500);
+
+    setWecomAppRuntime(buildRuntime(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: longChunk1 });
+      await dispatcherOptions.deliver({ text: longChunk2 });
+    }));
+
+    const unregister = registerWecomAppWebhookTarget({
+      account: buildAccount(),
+      config: { channels: { "wecom-app": {} } },
+      runtime: {},
+      path: "/wecom-app",
+    });
+
+    try {
+      const message = {
+        msgtype: "text",
+        msgid: "m-stream-2",
+        from: { userid: "user1" },
+        text: { content: "generate long" },
+        AgentID: 1001,
+      };
+
+      const encrypt = encryptWecomAppPlaintext({
+        encodingAESKey,
+        receiveId: "corp123",
+        plaintext: JSON.stringify(message),
+      });
+
+      const timestamp = "1700000020";
+      const nonce = "nonce-stream-2";
+      const signature = computeWecomAppMsgSignature({
+        token,
+        timestamp,
+        nonce,
+        encrypt,
+      });
+
+      const params = new URLSearchParams({
+        timestamp,
+        nonce,
+        msg_signature: signature,
+      });
+
+      const req = createRequest("POST", `/wecom-app?${params.toString()}`, JSON.stringify({ encrypt }));
+      const recorder = createResponseRecorder();
+
+      await handleWecomAppWebhookRequest(req, recorder.res);
+
+      // 等待 markStreamFinished 完成
+      await vi.waitFor(() => {
+        expect(sendWecomAppMessageMock).toHaveBeenCalled();
+      });
+
+      // 合并后超过 2048 字节，应该被拆分成多条消息
+      expect(sendWecomAppMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+      // 拼接所有发送的内容，应该等于完整累积内容
+      const sentTexts = sendWecomAppMessageMock.mock.calls.map((call: unknown[]) => call[2] as string);
+      const combined = sentTexts.join("");
+      expect(combined).toBe(`${longChunk1}\n\n${longChunk2}`);
     } finally {
       unregister();
     }
