@@ -378,7 +378,7 @@ export const wecomAppPlugin = {
    * 主动发送消息 (自建应用特有功能)
    */
   outbound: {
-    deliveryMode: "direct",
+    deliveryMode: "gateway",
 
     /**
      * 主动发送文本消息
