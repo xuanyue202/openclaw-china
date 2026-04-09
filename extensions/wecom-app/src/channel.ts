@@ -450,10 +450,20 @@ export const wecomAppPlugin = {
             error: new Error("Empty message after formatting"),
           };
         }
-        let lastResult: { ok: boolean; msgid?: string; errmsg?: string } | undefined;
-        for (const chunk of chunks) {
-          lastResult = await sendWecomAppMessage(account, target, chunk);
-          if (!lastResult.ok) break;
+        if (chunks.length > 1) {
+          console.log(`[wecom-app] sendText: 拆分为${chunks.length}段, 总${Buffer.byteLength(formatted, "utf8")}字节`);
+        }
+        let lastResult: { ok: boolean; msgid?: string; errcode?: number; errmsg?: string } | undefined;
+        for (let i = 0; i < chunks.length; i++) {
+          lastResult = await sendWecomAppMessage(account, target, chunks[i]);
+          if (!lastResult.ok) {
+            console.error(`[wecom-app] sendText[${i + 1}/${chunks.length}]失败: errcode=${lastResult.errcode}, errmsg=${lastResult.errmsg}`);
+            break;
+          }
+          // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+          if (i < chunks.length - 1) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
         }
         return {
           channel: "wecom-app",

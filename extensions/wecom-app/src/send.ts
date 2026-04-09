@@ -138,15 +138,26 @@ async function sendMessage(
   // 发送文本消息（拆分长文本，企微 API 单条限制 2048 字节）
   if (options.text?.trim()) {
     try {
-      const chunks = splitMessageByBytes(stripMarkdown(options.text).trim(), 2048).filter((c) => c.trim());
-      for (const chunk of chunks) {
-        const textResult = await sendWecomAppMessage(account, target, chunk);
+      const formatted = stripMarkdown(options.text).trim();
+      const chunks = splitMessageByBytes(formatted, 2048).filter((c) => c.trim());
+      if (chunks.length > 1) {
+        console.log(`[wecom-app] sendMessage: 拆分为${chunks.length}段, 总${Buffer.byteLength(formatted, "utf8")}字节`);
+      }
+      for (let i = 0; i < chunks.length; i++) {
+        const textResult = await sendWecomAppMessage(account, target, chunks[i]);
         results.push({
           ok: textResult.ok,
           msgid: textResult.msgid,
           error: textResult.ok ? undefined : textResult.errmsg,
         });
-        if (!textResult.ok) break;
+        if (!textResult.ok) {
+          console.error(`[wecom-app] sendMessage[${i + 1}/${chunks.length}]失败: errcode=${textResult.errcode}, errmsg=${textResult.errmsg}`);
+          break;
+        }
+        // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+        if (i < chunks.length - 1) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
       }
     } catch (err) {
       results.push({

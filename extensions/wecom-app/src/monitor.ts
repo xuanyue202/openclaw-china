@@ -797,17 +797,36 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
       ) {
         try {
           const chunks = splitActiveTextChunks(current.content);
-          for (const chunk of chunks) {
+          const totalBytes = Buffer.byteLength(current.content, "utf8");
+          logger.info(
+            `主动发送开始: streamId=${streamId}, 总内容=${totalBytes}字节, 拆分为${chunks.length}段`
+          );
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const chunkBytes = Buffer.byteLength(chunk, "utf8");
+            logger.info(
+              `主动发送[${i + 1}/${chunks.length}]: ${chunkBytes}字节, streamId=${streamId}`
+            );
             const result = await sendWecomAppMessage(target.account, activeTarget, chunk);
             if (!result.ok) {
-              throw new Error(result.errmsg || "unknown wecom-app send failure");
+              logger.error(
+                `主动发送[${i + 1}/${chunks.length}]失败: streamId=${streamId}, errcode=${result.errcode}, errmsg=${result.errmsg}`
+              );
+              throw new Error(
+                `chunk ${i + 1}/${chunks.length} failed: errcode=${result.errcode}, ${result.errmsg || "unknown"}`
+              );
+            }
+            logger.info(
+              `主动发送[${i + 1}/${chunks.length}]成功: streamId=${streamId}, msgid=${result.msgid}`
+            );
+            // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+            if (i < chunks.length - 1) {
+              await new Promise((r) => setTimeout(r, 200));
             }
           }
-          if (chunks.length > 0) {
-            logger.info(`主动发送完成: streamId=${streamId}, 共 ${chunks.length} 段`);
-          }
+          logger.info(`主动发送完成: streamId=${streamId}, 共 ${chunks.length} 段`);
         } catch (sendErr) {
-          logger.error(`主动发送失败: ${String(sendErr)}`);
+          logger.error(`主动发送失败: streamId=${streamId}, ${String(sendErr)}`);
         }
       }
     };
