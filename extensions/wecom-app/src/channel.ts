@@ -14,7 +14,7 @@ import {
   WecomAppConfigJsonSchema,
   type PluginConfig,
 } from "./config.js";
-import { registerWecomAppWebhookTarget } from "./monitor.js";
+import { registerWecomAppWebhookTarget, splitMessageByBytes } from "./monitor.js";
 import { startWecomAppWsRelayClient } from "./ws-relay-client.js";
 import { setWecomAppRuntime } from "./runtime.js";
 import { sendWecomAppMessage, stripMarkdown, downloadAndSendImage, downloadAndSendVoice, downloadAndSendFile, downloadAndSendVideo } from "./api.js";
@@ -438,14 +438,28 @@ export const wecomAppPlugin = {
       console.log(`[wecom-app] Account resolved: canSendActive=${account.canSendActive}`);
       console.log('[wecom-app] Target parsed:', target);
 
-      // 7. 发送（保持 try-catch 不变）
+      // 7. 拆分长文本并逐条发送（企微 API 单条限制 2048 字节）
       try {
-        const result = await sendWecomAppMessage(account, target, params.text);
+        const formatted = stripMarkdown(params.text).trim();
+        const chunks = splitMessageByBytes(formatted, 2048).filter((c) => c.trim());
+        if (chunks.length === 0) {
+          return {
+            channel: "wecom-app",
+            ok: false,
+            messageId: "",
+            error: new Error("Empty message after formatting"),
+          };
+        }
+        let lastResult: { ok: boolean; msgid?: string; errmsg?: string } | undefined;
+        for (const chunk of chunks) {
+          lastResult = await sendWecomAppMessage(account, target, chunk);
+          if (!lastResult.ok) break;
+        }
         return {
           channel: "wecom-app",
-          ok: result.ok,
-          messageId: result.msgid ?? "",
-          error: result.ok ? undefined : new Error(result.errmsg ?? "send failed"),
+          ok: lastResult!.ok,
+          messageId: lastResult!.msgid ?? "",
+          error: lastResult!.ok ? undefined : new Error(lastResult!.errmsg ?? "send failed"),
         };
       } catch (err) {
         return {
