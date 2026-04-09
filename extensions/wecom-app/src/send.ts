@@ -8,7 +8,8 @@
  */
 
 import type { ResolvedWecomAppAccount, WecomAppSendTarget } from "./types.js";
-import { sendWecomAppMessage, downloadAndSendImage } from "./api.js";
+import { sendWecomAppMessage, downloadAndSendImage, stripMarkdown } from "./api.js";
+import { splitMessageByBytes } from "./monitor.js";
 
 /**
  * 发送消息选项
@@ -134,15 +135,19 @@ async function sendMessage(
 ): Promise<SendResult> {
   const results: SendResult[] = [];
 
-  // 发送文本消息
+  // 发送文本消息（拆分长文本，企微 API 单条限制 2048 字节）
   if (options.text?.trim()) {
     try {
-      const textResult = await sendWecomAppMessage(account, target, options.text);
-      results.push({
-        ok: textResult.ok,
-        msgid: textResult.msgid,
-        error: textResult.ok ? undefined : textResult.errmsg,
-      });
+      const chunks = splitMessageByBytes(stripMarkdown(options.text).trim(), 2048).filter((c) => c.trim());
+      for (const chunk of chunks) {
+        const textResult = await sendWecomAppMessage(account, target, chunk);
+        results.push({
+          ok: textResult.ok,
+          msgid: textResult.msgid,
+          error: textResult.ok ? undefined : textResult.errmsg,
+        });
+        if (!textResult.ok) break;
+      }
     } catch (err) {
       results.push({
         ok: false,
