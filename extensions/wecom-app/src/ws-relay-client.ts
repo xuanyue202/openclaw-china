@@ -20,6 +20,7 @@ import { parseWecomAppPlainMessage, parseXmlBody, splitMessageByBytes } from "./
 import { dispatchWecomAppMessage } from "./bot.js";
 import { tryGetWecomAppRuntime } from "./runtime.js";
 import { sendWecomAppMessage, stripMarkdown } from "./api.js";
+import { buildWecomTextSendQueueKey, enqueueWecomTextSendTask } from "./text-send-queue.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -620,23 +621,25 @@ export async function startWecomAppWsRelayClient(opts: {
             // The relay webhook forwards each payload as a separate wecom message, so we
             // must chunk here rather than sending the full text in one payload.
             const chunks = splitMessageByBytes(stripMarkdown(responseText), 2048);
-            for (const chunk of chunks) {
-              if (!chunk.trim()) continue;
-              await sendRelayWebhookResponse({
-                webhookUrl,
-                sessionId,
-                userId,
-                payload: {
-                  type: "response",
-                  message_id: msgid ?? "",
-                  platform: "wecom",
-                  channel_id: senderId,
-                  text: chunk,
-                },
-                logger,
-                insecure,
-              });
-            }
+            await enqueueWecomTextSendTask(buildWecomTextSendQueueKey(account.accountId, senderId), async () => {
+              for (const chunk of chunks) {
+                if (!chunk.trim()) continue;
+                await sendRelayWebhookResponse({
+                  webhookUrl,
+                  sessionId,
+                  userId,
+                  payload: {
+                    type: "response",
+                    message_id: msgid ?? "",
+                    platform: "wecom",
+                    channel_id: senderId,
+                    text: chunk,
+                  },
+                  logger,
+                  insecure,
+                });
+              }
+            });
           })
           .catch((err) => {
             logger.error(`dispatch failed: ${String(err)}`);
@@ -654,7 +657,10 @@ export async function startWecomAppWsRelayClient(opts: {
           const welcome = account.config.welcomeText?.trim();
           const senderId = msg.from?.userid?.trim() ?? (msg as { FromUserName?: string }).FromUserName?.trim();
           if (welcome && account.canSendActive && senderId) {
-            sendWecomAppMessage(account, { userId: senderId }, welcome).catch((err) => {
+            enqueueWecomTextSendTask(
+              buildWecomTextSendQueueKey(account.accountId, senderId),
+              () => sendWecomAppMessage(account, { userId: senderId }, welcome)
+            ).catch((err) => {
               logger.error(`failed to send welcome: ${String(err)}`);
             });
           }

@@ -18,6 +18,8 @@ vi.mock("./api.js", async () => {
 import { computeWecomAppMsgSignature, encryptWecomAppPlaintext } from "./crypto.js";
 import { handleWecomAppWebhookRequest, registerWecomAppWebhookTarget } from "./monitor.js";
 import { clearWecomAppRuntime, setWecomAppRuntime, type PluginRuntime } from "./runtime.js";
+import { clearWecomTextSendQueues } from "./text-send-queue.js";
+import { wecomAppPlugin } from "./channel.js";
 import type { ResolvedWecomAppAccount } from "./types.js";
 
 const token = "token123";
@@ -109,6 +111,7 @@ function buildRuntime(dispatchReplyWithBufferedBlockDispatcher: NonNullable<
 }
 
 beforeEach(() => {
+  clearWecomTextSendQueues();
   sendWecomAppMessageMock.mockReset();
   sendWecomAppMessageMock.mockResolvedValue({
     ok: true,
@@ -251,18 +254,126 @@ describe("wecom-app active stream delivery", () => {
 
       await handleWecomAppWebhookRequest(req, recorder.res);
 
-      // 等待 markStreamFinished 完成
+      // 等待 markStreamFinished 完成并发出全部分片
       await vi.waitFor(() => {
-        expect(sendWecomAppMessageMock).toHaveBeenCalled();
+        expect(sendWecomAppMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
       });
-
-      // 合并后超过 2048 字节，应该被拆分成多条消息
-      expect(sendWecomAppMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
 
       // 拼接所有发送的内容，应该等于完整累积内容
       const sentTexts = sendWecomAppMessageMock.mock.calls.map((call: unknown[]) => call[2] as string);
       const combined = sentTexts.join("");
       expect(combined).toBe(`${longChunk1}\n\n${longChunk2}`);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("serializes same-recipient sends across monitor and outbound channel paths", async () => {
+    const firstChunkGate = createDeferred();
+    let sendCallIndex = 0;
+
+    sendWecomAppMessageMock.mockImplementation(async (_account, _target, text: string) => {
+      sendCallIndex += 1;
+      if (sendCallIndex === 1) {
+        await firstChunkGate.promise;
+      }
+      return {
+        ok: true,
+        errmsg: "ok",
+        msgid: `out-${sendCallIndex}`,
+        text,
+      };
+    });
+
+    const monitorMessage = "A".repeat(2200);
+    const outboundMessage = "B".repeat(2200);
+
+    setWecomAppRuntime(buildRuntime(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: monitorMessage });
+    }));
+
+    const unregister = registerWecomAppWebhookTarget({
+      account: buildAccount(),
+      config: { channels: { "wecom-app": {} } },
+      runtime: {},
+      path: "/wecom-app",
+    });
+
+    try {
+      const message = {
+        msgtype: "text",
+        msgid: "m-stream-3",
+        from: { userid: "user1" },
+        text: { content: "hi" },
+        AgentID: 1001,
+      };
+
+      const encrypt = encryptWecomAppPlaintext({
+        encodingAESKey,
+        receiveId: "corp123",
+        plaintext: JSON.stringify(message),
+      });
+
+      const timestamp = "1700000030";
+      const nonce = "nonce-stream-3";
+      const signature = computeWecomAppMsgSignature({
+        token,
+        timestamp,
+        nonce,
+        encrypt,
+      });
+
+      const params = new URLSearchParams({
+        timestamp,
+        nonce,
+        msg_signature: signature,
+      });
+
+      const req = createRequest("POST", `/wecom-app?${params.toString()}`, JSON.stringify({ encrypt }));
+      const recorder = createResponseRecorder();
+
+      const handled = await handleWecomAppWebhookRequest(req, recorder.res);
+      expect(handled).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(1);
+      });
+
+      const outboundSend = wecomAppPlugin.outbound.sendText({
+        cfg: {
+          channels: {
+            "wecom-app": {
+              accounts: {
+                app: {
+                  corpId: "corp-id",
+                  corpSecret: "secret",
+                  agentId: 1001,
+                },
+              },
+            },
+          },
+        },
+        to: "user:user1@app",
+        text: outboundMessage,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(1);
+
+      firstChunkGate.resolve();
+      await outboundSend;
+
+      await vi.waitFor(() => {
+        expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(4);
+      });
+
+      const sentTexts = sendWecomAppMessageMock.mock.calls.map((call: unknown[]) => call[2] as string);
+      expect(sentTexts).toEqual([
+        "A".repeat(2048),
+        "A".repeat(152),
+        "B".repeat(2048),
+        "B".repeat(152),
+      ]);
     } finally {
       unregister();
     }

@@ -10,6 +10,7 @@
 import type { ResolvedWecomAppAccount, WecomAppSendTarget } from "./types.js";
 import { sendWecomAppMessage, downloadAndSendImage, stripMarkdown } from "./api.js";
 import { splitMessageByBytes } from "./monitor.js";
+import { buildWecomTextSendQueueKey, enqueueWecomTextSendTask } from "./text-send-queue.js";
 
 /**
  * 发送消息选项
@@ -143,22 +144,24 @@ async function sendMessage(
       if (chunks.length > 1) {
         console.log(`[wecom-app] sendMessage: 拆分为${chunks.length}段, 总${Buffer.byteLength(formatted, "utf8")}字节`);
       }
-      for (let i = 0; i < chunks.length; i++) {
-        const textResult = await sendWecomAppMessage(account, target, chunks[i]);
-        results.push({
-          ok: textResult.ok,
-          msgid: textResult.msgid,
-          error: textResult.ok ? undefined : textResult.errmsg,
-        });
-        if (!textResult.ok) {
-          console.error(`[wecom-app] sendMessage[${i + 1}/${chunks.length}]失败: errcode=${textResult.errcode}, errmsg=${textResult.errmsg}`);
-          break;
+      await enqueueWecomTextSendTask(buildWecomTextSendQueueKey(account.accountId, target.userId), async () => {
+        for (let i = 0; i < chunks.length; i++) {
+          const textResult = await sendWecomAppMessage(account, target, chunks[i]);
+          results.push({
+            ok: textResult.ok,
+            msgid: textResult.msgid,
+            error: textResult.ok ? undefined : textResult.errmsg,
+          });
+          if (!textResult.ok) {
+            console.error(`[wecom-app] sendMessage[${i + 1}/${chunks.length}]失败: errcode=${textResult.errcode}, errmsg=${textResult.errmsg}`);
+            break;
+          }
+          // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+          if (i < chunks.length - 1) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
         }
-        // 多段时在发送间加短暂延迟，避免企微 API 频率限制
-        if (i < chunks.length - 1) {
-          await new Promise((r) => setTimeout(r, 200));
-        }
-      }
+      });
     } catch (err) {
       results.push({
         ok: false,

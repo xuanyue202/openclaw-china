@@ -18,6 +18,7 @@ import { registerWecomAppWebhookTarget, splitMessageByBytes } from "./monitor.js
 import { startWecomAppWsRelayClient } from "./ws-relay-client.js";
 import { setWecomAppRuntime } from "./runtime.js";
 import { sendWecomAppMessage, stripMarkdown, downloadAndSendImage, downloadAndSendVoice, downloadAndSendFile, downloadAndSendVideo } from "./api.js";
+import { buildWecomTextSendQueueKey, enqueueWecomTextSendTask } from "./text-send-queue.js";
 import { isWecomAudioMimeType, isWecomAudioSource, shouldTranscodeWecomVoice } from "./voice.js";
 
 /**
@@ -453,23 +454,27 @@ export const wecomAppPlugin = {
         if (chunks.length > 1) {
           console.log(`[wecom-app] sendText: 拆分为${chunks.length}段, 总${Buffer.byteLength(formatted, "utf8")}字节`);
         }
-        let lastResult: { ok: boolean; msgid?: string; errcode?: number; errmsg?: string } | undefined;
-        for (let i = 0; i < chunks.length; i++) {
-          lastResult = await sendWecomAppMessage(account, target, chunks[i]);
-          if (!lastResult.ok) {
-            console.error(`[wecom-app] sendText[${i + 1}/${chunks.length}]失败: errcode=${lastResult.errcode}, errmsg=${lastResult.errmsg}`);
-            break;
+        const queueKey = buildWecomTextSendQueueKey(account.accountId, target.userId);
+        const lastResult = await enqueueWecomTextSendTask(queueKey, async () => {
+          let queuedResult: { ok: boolean; msgid?: string; errcode?: number; errmsg?: string } | undefined;
+          for (let i = 0; i < chunks.length; i++) {
+            queuedResult = await sendWecomAppMessage(account, target, chunks[i]);
+            if (!queuedResult.ok) {
+              console.error(`[wecom-app] sendText[${i + 1}/${chunks.length}]失败: errcode=${queuedResult.errcode}, errmsg=${queuedResult.errmsg}`);
+              break;
+            }
+            // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+            if (i < chunks.length - 1) {
+              await new Promise((r) => setTimeout(r, 200));
+            }
           }
-          // 多段时在发送间加短暂延迟，避免企微 API 频率限制
-          if (i < chunks.length - 1) {
-            await new Promise((r) => setTimeout(r, 200));
-          }
-        }
+          return queuedResult!;
+        });
         return {
           channel: "wecom-app",
-          ok: lastResult!.ok,
-          messageId: lastResult!.msgid ?? "",
-          error: lastResult!.ok ? undefined : new Error(lastResult!.errmsg ?? "send failed"),
+          ok: lastResult.ok,
+          messageId: lastResult.msgid ?? "",
+          error: lastResult.ok ? undefined : new Error(lastResult.errmsg ?? "send failed"),
         };
       } catch (err) {
         return {
@@ -607,7 +612,10 @@ export const wecomAppPlugin = {
           if (params.text?.trim()) {
             try {
               console.log(`[wecom-app] Sending caption text before file: ${params.text}`);
-              await sendWecomAppMessage(account, target, params.text);
+              await enqueueWecomTextSendTask(
+                buildWecomTextSendQueueKey(account.accountId, target.userId),
+                () => sendWecomAppMessage(account, target, params.text!)
+              );
             } catch (err) {
               console.warn(`[wecom-app] Failed to send caption before file:`, err);
             }

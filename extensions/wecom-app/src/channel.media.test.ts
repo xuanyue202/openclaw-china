@@ -1,4 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearWecomTextSendQueues } from "./text-send-queue.js";
+
+function createDeferred() {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return {
+    promise,
+    resolve: () => resolve?.(),
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   sendWecomAppMessage: vi.fn(),
@@ -34,6 +46,7 @@ function createCfg(voiceTranscode?: { enabled?: boolean }) {
 }
 
 beforeEach(() => {
+  clearWecomTextSendQueues();
   vi.clearAllMocks();
   mocks.downloadAndSendVoice.mockResolvedValue({ ok: true, msgid: "voice-msg" });
   mocks.downloadAndSendFile.mockResolvedValue({ ok: true, msgid: "file-msg" });
@@ -43,6 +56,51 @@ beforeEach(() => {
 });
 
 describe("wecom-app outbound media routing", () => {
+  it("keeps split text chunks contiguous for the same recipient", async () => {
+    const firstChunkGate = createDeferred();
+    let sendCallIndex = 0;
+
+    mocks.sendWecomAppMessage.mockImplementation(async (_account, _target, text: string) => {
+      sendCallIndex += 1;
+      if (sendCallIndex === 1) {
+        await firstChunkGate.promise;
+      }
+      return { ok: true, msgid: `text-msg-${sendCallIndex}`, text };
+    });
+
+    const firstMessage = "A".repeat(2200);
+    const secondMessage = "B".repeat(2200);
+
+    const firstSend = wecomAppPlugin.outbound.sendText({
+      cfg: createCfg(),
+      to: "user:alice",
+      text: firstMessage,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.sendWecomAppMessage).toHaveBeenCalledTimes(1);
+    });
+
+    const secondSend = wecomAppPlugin.outbound.sendText({
+      cfg: createCfg(),
+      to: "user:alice",
+      text: secondMessage,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mocks.sendWecomAppMessage).toHaveBeenCalledTimes(1);
+
+    firstChunkGate.resolve();
+    await Promise.all([firstSend, secondSend]);
+
+    const sentTexts = mocks.sendWecomAppMessage.mock.calls.map((call) => call[2] as string);
+    expect(sentTexts).toHaveLength(4);
+    expect(sentTexts[0]).toBe("A".repeat(2048));
+    expect(sentTexts[1]).toBe("A".repeat(152));
+    expect(sentTexts[2]).toBe("B".repeat(2048));
+    expect(sentTexts[3]).toBe("B".repeat(152));
+  });
+
   it("routes local wav to voice send and enables transcode by default", async () => {
     const result = await wecomAppPlugin.outbound.sendMedia({
       cfg: createCfg(),

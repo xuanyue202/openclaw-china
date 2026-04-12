@@ -33,6 +33,7 @@ import {
   finalizeInboundMedia,
   pruneInboundMediaDir,
 } from "./api.js";
+import { buildWecomTextSendQueueKey, enqueueWecomTextSendTask } from "./text-send-queue.js";
 
 export type WecomAppDispatchHooks = {
   onChunk: (text: string) => void | Promise<void>;
@@ -679,7 +680,13 @@ export async function sendActiveMessage(params: {
   }
 
   try {
-    const result = await sendWecomAppMessage(account, { userId, chatid }, message);
+    const recipientId = userId ?? chatid;
+    const result = recipientId
+      ? await enqueueWecomTextSendTask(
+          buildWecomTextSendQueueKey(account.accountId, recipientId),
+          () => sendWecomAppMessage(account, { userId, chatid }, message)
+        )
+      : await sendWecomAppMessage(account, { userId, chatid }, message);
     return {
       ok: result.ok,
       error: result.ok ? undefined : result.errmsg,

@@ -17,6 +17,7 @@ import {
 import { dispatchWecomAppMessage } from "./bot.js";
 import { tryGetWecomAppRuntime } from "./runtime.js";
 import { sendWecomAppMessage, stripMarkdown } from "./api.js";
+import { buildWecomTextSendQueueKey, enqueueWecomTextSendTask } from "./text-send-queue.js";
 
 export type WecomAppRuntimeEnv = {
   log?: (message: string) => void;
@@ -725,7 +726,10 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
         // 使用主动发送欢迎消息
         const senderId = msg.from?.userid?.trim() ?? (msg as { FromUserName?: string }).FromUserName?.trim();
         if (senderId) {
-          sendWecomAppMessage(target.account, { userId: senderId }, welcome).catch((err) => {
+          enqueueWecomTextSendTask(
+            buildWecomTextSendQueueKey(target.account.accountId, senderId),
+            () => sendWecomAppMessage(target.account, { userId: senderId }, welcome)
+          ).catch((err) => {
             logger.error(`failed to send welcome message: ${String(err)}`);
           });
         }
@@ -798,32 +802,41 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
         try {
           const chunks = splitActiveTextChunks(current.content);
           const totalBytes = Buffer.byteLength(current.content, "utf8");
+          const activeQueueTargetId = senderId ?? chatid;
+          if (!activeQueueTargetId) {
+            throw new Error(`missing queue target for streamId=${streamId}`);
+          }
           logger.info(
             `主动发送开始: streamId=${streamId}, 总内容=${totalBytes}字节, 拆分为${chunks.length}段`
           );
-          for (let i = 0; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            const chunkBytes = Buffer.byteLength(chunk, "utf8");
-            logger.info(
-              `主动发送[${i + 1}/${chunks.length}]: ${chunkBytes}字节, streamId=${streamId}`
-            );
-            const result = await sendWecomAppMessage(target.account, activeTarget, chunk);
-            if (!result.ok) {
-              logger.error(
-                `主动发送[${i + 1}/${chunks.length}]失败: streamId=${streamId}, errcode=${result.errcode}, errmsg=${result.errmsg}`
-              );
-              throw new Error(
-                `chunk ${i + 1}/${chunks.length} failed: errcode=${result.errcode}, ${result.errmsg || "unknown"}`
-              );
+          await enqueueWecomTextSendTask(
+            buildWecomTextSendQueueKey(target.account.accountId, activeQueueTargetId),
+            async () => {
+              for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+                const chunkBytes = Buffer.byteLength(chunk, "utf8");
+                logger.info(
+                  `主动发送[${i + 1}/${chunks.length}]: ${chunkBytes}字节, streamId=${streamId}`
+                );
+                const result = await sendWecomAppMessage(target.account, activeTarget, chunk);
+                if (!result.ok) {
+                  logger.error(
+                    `主动发送[${i + 1}/${chunks.length}]失败: streamId=${streamId}, errcode=${result.errcode}, errmsg=${result.errmsg}`
+                  );
+                  throw new Error(
+                    `chunk ${i + 1}/${chunks.length} failed: errcode=${result.errcode}, ${result.errmsg || "unknown"}`
+                  );
+                }
+                logger.info(
+                  `主动发送[${i + 1}/${chunks.length}]成功: streamId=${streamId}, msgid=${result.msgid}`
+                );
+                // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+                if (i < chunks.length - 1) {
+                  await new Promise((r) => setTimeout(r, 200));
+                }
+              }
             }
-            logger.info(
-              `主动发送[${i + 1}/${chunks.length}]成功: streamId=${streamId}, msgid=${result.msgid}`
-            );
-            // 多段时在发送间加短暂延迟，避免企微 API 频率限制
-            if (i < chunks.length - 1) {
-              await new Promise((r) => setTimeout(r, 200));
-            }
-          }
+          );
           logger.info(`主动发送完成: streamId=${streamId}, 共 ${chunks.length} 段`);
         } catch (sendErr) {
           logger.error(`主动发送失败: streamId=${streamId}, ${String(sendErr)}`);

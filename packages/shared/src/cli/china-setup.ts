@@ -95,7 +95,7 @@ const CHANNEL_GUIDE_LINKS: Record<ChannelId, string> = {
   "feishu-china": "https://github.com/BytePioneer-AI/openclaw-china/blob/main/README.md",
   wecom: `${GUIDES_BASE}/wecom/configuration.md`,
   "wecom-app": `${GUIDES_BASE}/wecom-app/configuration.md`,
-  "wecom-kf": "https://github.com/BytePioneer-AI/openclaw-china/blob/main/extensions/wecom-kf/README.md",
+  "wecom-kf": `${GUIDES_BASE}/wecom-kf/configuration.md`,
   "wechat-mp": `${GUIDES_BASE}/wechat-mp/configuration.md`,
   qqbot: `${GUIDES_BASE}/qqbot/configuration.md`,
 };
@@ -1021,4 +1021,3 @@ export function registerChinaSetupCli(api: ApiLike, opts?: RegisterChinaSetupCli
     { commands: ["china"] }
   );
 }
-

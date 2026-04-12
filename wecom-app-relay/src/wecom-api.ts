@@ -6,6 +6,24 @@ import type { AccountConfig } from "./config.js";
 
 type TokenCache = { token: string; expiresAt: number };
 const tokenCache = new Map<string, TokenCache>();
+const textSendQueues = new Map<string, Promise<void>>();
+
+function buildTextSendQueueKey(account: AccountConfig, userId: string): string {
+  return `${account.corpId}:${account.agentId}:${userId}`;
+}
+
+function enqueueTextSendTask<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = textSendQueues.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(task);
+  const queued = run.then(() => undefined, () => undefined);
+  textSendQueues.set(key, queued);
+  void queued.finally(() => {
+    if (textSendQueues.get(key) === queued) {
+      textSendQueues.delete(key);
+    }
+  });
+  return run;
+}
 
 export async function getAccessToken(account: AccountConfig): Promise<string> {
   const key = `${account.corpId}:${account.agentId}`;
@@ -31,20 +49,22 @@ export async function sendTextMessage(
   userId: string,
   text: string,
 ): Promise<{ ok: boolean; errcode?: number; errmsg?: string }> {
-  const accessToken = await getAccessToken(account);
-  const url = `${account.apiBaseUrl}/cgi-bin/message/send?access_token=${accessToken}`;
+  return enqueueTextSendTask(buildTextSendQueueKey(account, userId), async () => {
+    const accessToken = await getAccessToken(account);
+    const url = `${account.apiBaseUrl}/cgi-bin/message/send?access_token=${accessToken}`;
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      touser: userId,
-      msgtype: "text",
-      agentid: account.agentId,
-      text: { content: text },
-    }),
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        touser: userId,
+        msgtype: "text",
+        agentid: account.agentId,
+        text: { content: text },
+      }),
+    });
+
+    const data = (await resp.json()) as { errcode?: number; errmsg?: string };
+    return { ok: (data.errcode ?? 0) === 0, errcode: data.errcode, errmsg: data.errmsg };
   });
-
-  const data = (await resp.json()) as { errcode?: number; errmsg?: string };
-  return { ok: (data.errcode ?? 0) === 0, errcode: data.errcode, errmsg: data.errmsg };
 }
