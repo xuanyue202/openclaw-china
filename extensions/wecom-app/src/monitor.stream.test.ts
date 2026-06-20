@@ -16,7 +16,7 @@ vi.mock("./api.js", async () => {
 });
 
 import { computeWecomAppMsgSignature, encryptWecomAppPlaintext } from "./crypto.js";
-import { handleWecomAppWebhookRequest, registerWecomAppWebhookTarget } from "./monitor.js";
+import { handleWecomAppWebhookRequest, registerWecomAppWebhookTarget, splitMessageByBytes } from "./monitor.js";
 import { clearWecomAppRuntime, setWecomAppRuntime, type PluginRuntime } from "./runtime.js";
 import { clearWecomTextSendQueues } from "./text-send-queue.js";
 import { wecomAppPlugin } from "./channel.js";
@@ -123,6 +123,42 @@ beforeEach(() => {
 afterEach(() => {
   clearWecomAppRuntime();
   vi.restoreAllMocks();
+});
+
+describe("splitMessageByBytes", () => {
+  it("prefers Chinese sentence boundaries before hard cutting", () => {
+    const text = "第一句中文。第二句中文。第三句中文。";
+    const limit = Buffer.byteLength("第一句中文。第二句中文。", "utf8");
+
+    expect(splitMessageByBytes(text, limit)).toEqual([
+      "第一句中文。第二句中文。",
+      "第三句中文。",
+    ]);
+  });
+
+  it("prefers English sentence boundaries before hard cutting", () => {
+    const text = "First sentence. Second sentence. Third sentence.";
+    const limit = Buffer.byteLength("First sentence. Second sentence. ", "utf8");
+
+    expect(splitMessageByBytes(text, limit)).toEqual([
+      "First sentence. Second sentence. ",
+      "Third sentence.",
+    ]);
+  });
+
+  it("avoids cutting file paths in the middle when a line boundary is available", () => {
+    const text = "请检查以下文件：\nidentity/device-auth.json\nidentity/device.json\nfeishu-user.json";
+    const limit = Buffer.byteLength("请检查以下文件：\nidentity/device-auth.json\nidentity/device.j", "utf8");
+
+    const chunks = splitMessageByBytes(text, limit);
+
+    expect(chunks).toEqual([
+      "请检查以下文件：\nidentity/device-auth.json\n",
+      "identity/device.json\nfeishu-user.json",
+    ]);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= limit)).toBe(true);
+  });
 });
 
 describe("wecom-app active stream delivery", () => {
@@ -257,7 +293,7 @@ describe("wecom-app active stream delivery", () => {
       // 等待 markStreamFinished 完成并发出全部分片
       await vi.waitFor(() => {
         expect(sendWecomAppMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-      });
+      }, { timeout: 3000 });
 
       // 拼接所有发送的内容，应该等于完整累积内容
       const sentTexts = sendWecomAppMessageMock.mock.calls.map((call: unknown[]) => call[2] as string);
@@ -337,7 +373,7 @@ describe("wecom-app active stream delivery", () => {
 
       await vi.waitFor(() => {
         expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(1);
-      });
+      }, { timeout: 3000 });
 
       const outboundSend = wecomAppPlugin.outbound.sendText({
         cfg: {
@@ -365,7 +401,7 @@ describe("wecom-app active stream delivery", () => {
 
       await vi.waitFor(() => {
         expect(sendWecomAppMessageMock).toHaveBeenCalledTimes(4);
-      });
+      }, { timeout: 5000 });
 
       const sentTexts = sendWecomAppMessageMock.mock.calls.map((call: unknown[]) => call[2] as string);
       expect(sentTexts).toEqual([

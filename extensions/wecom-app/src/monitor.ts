@@ -147,6 +147,110 @@ function truncateUtf8Bytes(text: string, maxBytes: number): string {
   return slice.toString("utf8");
 }
 
+const SMART_SPLIT_MIN_RATIO = 0.6;
+const SENTENCE_BOUNDARY_RE = /[。！？.!?；;:：](?:["'”’」』）】》]*)?(?:\s+|$)/g;
+const CLAUSE_BOUNDARY_RE = /[,，、](?:\s+|$)/g;
+
+function measureUtf8Bytes(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+function findIndexWithinUtf8Limit(text: string, maxBytes: number): number {
+  let bytes = 0;
+  let index = 0;
+
+  for (const char of text) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (bytes + charBytes > maxBytes) break;
+    bytes += charBytes;
+    index += char.length;
+  }
+
+  return index;
+}
+
+function findLastRegexBoundary(text: string, pattern: RegExp): number {
+  pattern.lastIndex = 0;
+  let lastBoundary = -1;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    lastBoundary = match.index + match[0].length;
+  }
+  return lastBoundary;
+}
+
+function findBoundaryByPatterns(prefix: string, minIndex: number): number {
+  const boundaryPatterns = [
+    /\n\n+/g,
+    /\n/g,
+    SENTENCE_BOUNDARY_RE,
+    CLAUSE_BOUNDARY_RE,
+    /\s+/g,
+  ];
+
+  for (const pattern of boundaryPatterns) {
+    const boundary = findLastRegexBoundary(prefix, pattern);
+    if (boundary >= minIndex) return boundary;
+  }
+
+  for (const pattern of boundaryPatterns) {
+    const boundary = findLastRegexBoundary(prefix, pattern);
+    if (boundary > 0) return boundary;
+  }
+
+  return -1;
+}
+
+function findTokenStart(text: string, endIndex: number): number {
+  let startIndex = endIndex;
+  while (startIndex > 0) {
+    const prev = text[startIndex - 1];
+    if (!prev || /\s/.test(prev)) break;
+    startIndex -= 1;
+  }
+  return startIndex;
+}
+
+function isPathLikeToken(token: string): boolean {
+  if (!token || /\s/.test(token)) return false;
+  return (
+    token.startsWith("./") ||
+    token.startsWith("../") ||
+    token.startsWith("~/") ||
+    /[\\/]/.test(token) ||
+    /[A-Za-z0-9_-]+\.[A-Za-z0-9._-]+$/.test(token)
+  );
+}
+
+function isAsciiWordLikeToken(token: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{5,}$/.test(token);
+}
+
+function findTokenAwareFallbackBoundary(text: string, hardIndex: number, minIndex: number): number {
+  const tokenStart = findTokenStart(text, hardIndex);
+  const token = text.slice(tokenStart, hardIndex);
+  const nextChar = text[hardIndex] ?? "";
+
+  if (
+    tokenStart >= minIndex &&
+    /[^\s]/.test(nextChar) &&
+    (isPathLikeToken(token) || isAsciiWordLikeToken(token))
+  ) {
+    return tokenStart;
+  }
+
+  return hardIndex;
+}
+
+function findSmartSplitIndex(text: string, maxBytes: number): number {
+  const hardIndex = Math.max(1, findIndexWithinUtf8Limit(text, maxBytes));
+  const prefix = text.slice(0, hardIndex);
+  const minIndex = Math.max(1, Math.floor(hardIndex * SMART_SPLIT_MIN_RATIO));
+  const semanticBoundary = findBoundaryByPatterns(prefix, minIndex);
+  if (semanticBoundary > 0) return semanticBoundary;
+  return findTokenAwareFallbackBoundary(text, hardIndex, minIndex);
+}
+
 /**
  * 将长文本按字节长度分割成多个片段
  * 企业微信限制：每条消息最长 2048 字节
@@ -155,27 +259,20 @@ function truncateUtf8Bytes(text: string, maxBytes: number): string {
  * @returns 分割后的文本数组
  */
 export function splitMessageByBytes(text: string, maxBytes = 2048): string[] {
-  const result: string[] = [];
-  let current = "";
-  let currentBytes = 0;
+  if (!text || maxBytes <= 0) return text ? [text] : [];
+  if (measureUtf8Bytes(text) <= maxBytes) return [text];
 
-  for (const char of text) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    
-    // 如果当前字符加上后超过限制，先保存当前片段
-    if (currentBytes + charBytes > maxBytes && current.length > 0) {
-      result.push(current);
-      current = char;
-      currentBytes = charBytes;
-    } else {
-      current += char;
-      currentBytes += charBytes;
-    }
+  const result: string[] = [];
+  let remaining = text;
+
+  while (measureUtf8Bytes(remaining) > maxBytes) {
+    const splitIndex = findSmartSplitIndex(remaining, maxBytes);
+    result.push(remaining.slice(0, splitIndex));
+    remaining = remaining.slice(splitIndex);
   }
 
-  // 保存最后一个片段
-  if (current.length > 0) {
-    result.push(current);
+  if (remaining.length > 0) {
+    result.push(remaining);
   }
 
   return result;
@@ -830,9 +927,9 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
                 logger.info(
                   `主动发送[${i + 1}/${chunks.length}]成功: streamId=${streamId}, msgid=${result.msgid}`
                 );
-                // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+                // 多段时在发送间加短暂延迟，避免企微 API 频率限制与乱序
                 if (i < chunks.length - 1) {
-                  await new Promise((r) => setTimeout(r, 200));
+                  await new Promise((r) => setTimeout(r, 1000));
                 }
               }
             }

@@ -463,9 +463,9 @@ export const wecomAppPlugin = {
               console.error(`[wecom-app] sendText[${i + 1}/${chunks.length}]失败: errcode=${queuedResult.errcode}, errmsg=${queuedResult.errmsg}`);
               break;
             }
-            // 多段时在发送间加短暂延迟，避免企微 API 频率限制
+            // 多段时在发送间加短暂延迟，避免企微 API 频率限制与乱序
             if (i < chunks.length - 1) {
-              await new Promise((r) => setTimeout(r, 200));
+              await new Promise((r) => setTimeout(r, 1000));
             }
           }
           return queuedResult!;

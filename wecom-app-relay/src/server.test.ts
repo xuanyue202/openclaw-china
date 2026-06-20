@@ -512,6 +512,145 @@ describe("relay server", () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════════
+  // Outbound: direct HTTP send → WeCom API
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe("direct send endpoint", () => {
+    it("sends text via accountId without a connected relay client", async () => {
+      const r = await startRelay();
+      const port = getPort(r);
+
+      expect(r.accountToClient.size).toBe(0);
+
+      const resp = await httpRequest(port, {
+        method: "POST",
+        path: "/send",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${TEST_AUTH_TOKEN}`,
+        },
+        body: JSON.stringify({
+          accountId: "default",
+          userId: "UserA",
+          text: "hi from another client",
+        }),
+      });
+
+      expect(resp.status).toBe(200);
+      const body = JSON.parse(resp.body);
+      expect(body.ok).toBe(true);
+      expect(r.accountToClient.size).toBe(0);
+
+      expect(mockSendText).toHaveBeenCalledTimes(1);
+      const [account, userId, text] = mockSendText.mock.calls[0]!;
+      expect(account.corpId).toBe(TEST_CORP_ID);
+      expect(userId).toBe("UserA");
+      expect(text).toBe("hi from another client");
+    });
+
+    it("rejects direct send without bearer auth", async () => {
+      const r = await startRelay();
+
+      const resp = await httpRequest(getPort(r), {
+        method: "POST",
+        path: "/send",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: "default", userId: "UserA", text: "hi" }),
+      });
+
+      expect(resp.status).toBe(401);
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("rejects direct send with an invalid bearer token", async () => {
+      const r = await startRelay();
+
+      const resp = await httpRequest(getPort(r), {
+        method: "POST",
+        path: "/send",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong-token",
+        },
+        body: JSON.stringify({ accountId: "default", userId: "UserA", text: "hi" }),
+      });
+
+      expect(resp.status).toBe(401);
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("rejects direct send with missing fields", async () => {
+      const r = await startRelay();
+
+      const resp = await httpRequest(getPort(r), {
+        method: "POST",
+        path: "/send",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${TEST_AUTH_TOKEN}`,
+        },
+        body: JSON.stringify({ accountId: "default", text: "hi" }),
+      });
+
+      expect(resp.status).toBe(400);
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("rejects direct send with an invalid JSON payload", async () => {
+      const r = await startRelay();
+
+      const resp = await httpRequest(getPort(r), {
+        method: "POST",
+        path: "/send",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${TEST_AUTH_TOKEN}`,
+        },
+        body: "null",
+      });
+
+      expect(resp.status).toBe(400);
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("returns 404 for an unknown accountId", async () => {
+      const r = await startRelay();
+
+      const resp = await httpRequest(getPort(r), {
+        method: "POST",
+        path: "/send",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${TEST_AUTH_TOKEN}`,
+        },
+        body: JSON.stringify({ accountId: "missing", userId: "UserA", text: "hi" }),
+      });
+
+      expect(resp.status).toBe(404);
+      expect(mockSendText).not.toHaveBeenCalled();
+    });
+
+    it("returns 502 when direct send fails", async () => {
+      mockSendText.mockRejectedValueOnce(new Error("network error"));
+      const r = await startRelay();
+
+      const resp = await httpRequest(getPort(r), {
+        method: "POST",
+        path: "/send",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${TEST_AUTH_TOKEN}`,
+        },
+        body: JSON.stringify({ accountId: "default", userId: "UserA", text: "hi" }),
+      });
+
+      expect(resp.status).toBe(502);
+      const body = JSON.parse(resp.body);
+      expect(body.ok).toBe(false);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
   // Outbound: send_message via WebSocket → WeCom API
   // ════════════════════════════════════════════════════════════════════════════
 

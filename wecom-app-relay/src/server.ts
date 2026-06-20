@@ -5,6 +5,7 @@
  * - WebSocket /ws: 接受 extension 客户端连接
  * - HTTP /wecom: 接收企微回调
  * - HTTP /webhook: 接收客户端响应
+ * - HTTP /send: 直接发送企微文本消息
  * - HTTP /health: 健康检查
  */
 
@@ -81,6 +82,10 @@ function readBody(req: http.IncomingMessage, maxBytes: number): Promise<string> 
     req.on("end", () => resolve(body));
     req.on("error", reject);
   });
+}
+
+function getHeaderValue(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
 /** Check rate limit for a client */
@@ -161,6 +166,12 @@ export function createRelayServer(config: RelayConfig) {
           [...accountToClient.entries()].map(([k, v]) => [k, { sessionId: v, connected: clients.has(v) }]),
         ),
       }));
+      return;
+    }
+
+    // Direct send API for trusted callers. This does not use accountToClient.
+    if (req.method === "POST" && pathname === "/send") {
+      await handleDirectSend(req, res);
       return;
     }
 
@@ -493,6 +504,73 @@ export function createRelayServer(config: RelayConfig) {
     res.end("method not allowed");
   }
 
+  // ── Direct send handler ──
+  async function handleDirectSend(req: http.IncomingMessage, res: http.ServerResponse) {
+    const authHeader = getHeaderValue(req.headers.authorization);
+    const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+    const bearerToken = match?.[1] ?? "";
+
+    if (!bearerToken || !safeCompare(bearerToken, config.authToken)) {
+      res.writeHead(401, {
+        "Content-Type": "application/json",
+        "WWW-Authenticate": 'Bearer realm="wecom-app-relay"',
+      });
+      res.end(JSON.stringify({ ok: false, error: "unauthorized" }));
+      return;
+    }
+
+    let body: string;
+    try {
+      body = await readBody(req, MAX_REQUEST_BODY_BYTES);
+    } catch {
+      res.writeHead(413, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "request too large" }));
+      return;
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(body) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("invalid payload");
+      }
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "invalid json" }));
+      return;
+    }
+
+    const { accountId, userId, text } = payload;
+    if (
+      typeof accountId !== "string" || accountId.length === 0 ||
+      typeof userId !== "string" || userId.length === 0 ||
+      typeof text !== "string" || text.length === 0
+    ) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "accountId, userId and text required" }));
+      return;
+    }
+
+    const targetAccount = config.accounts[accountId];
+    if (!targetAccount) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "account not found" }));
+      return;
+    }
+
+    try {
+      const result = await sendTextMessage(targetAccount, userId, text);
+      log(`direct send → WeCom: account=${accountId} userId=${userId} ok=${result.ok} errcode=${result.errcode}`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: result.ok, errcode: result.errcode, errmsg: result.errmsg }));
+    } catch (err) {
+      error(`direct send → WeCom failed: ${String(err)}`);
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(err) }));
+    }
+  }
+
   // ── Webhook response handler ──
   async function handleWebhookResponse(req: http.IncomingMessage, res: http.ServerResponse) {
     const sessionId = req.headers["x-session-id"] as string ?? "";
@@ -641,6 +719,7 @@ export function createRelayServer(config: RelayConfig) {
         log(`WebSocket endpoint: ws://${config.host}:${config.port}/ws`);
         log(`Webhook endpoint:   http://${config.host}:${config.port}/webhook`);
         log(`Media proxy:        http://${config.host}:${config.port}/media/proxy`);
+        log(`Direct send:        http://${config.host}:${config.port}/send`);
         log(`Health check:       http://${config.host}:${config.port}/health`);
         for (const [aid, acfg] of Object.entries(config.accounts)) {
           log(`WeCom callback [${aid}]: http://${config.host}:${config.port}${acfg.webhookPath}`);
