@@ -113,6 +113,10 @@ wecom-app-relay --config relay.config.json
 | `port` | number | `9080` | 监听端口 |
 | `authToken` | string | 必填 | WebSocket 认证密钥 |
 | `accounts` | object | 必填 | 企微账户配置（支持多账户） |
+| `authMode` | `"compat"` \| `"strict"` | `compat` | 客户端认证模式，见下文「每账户认证」 |
+| `authMaxSkewSec` | number | `300` | 签名时间戳允许的时钟偏差（秒） |
+| `allowGlobalTokenWs` | boolean | `true` | 是否允许用全局 `authToken` 登录 WS（会拿到**全部**账户并顶掉它们的客户端），建议迁移后设为 `false` |
+| `allowGlobalTokenSend` | boolean | `true` | 是否允许用全局 `authToken` 调 `POST /send`（可发任意账户），建议迁移后设为 `false` |
 
 ### 账户字段
 
@@ -126,6 +130,31 @@ wecom-app-relay --config relay.config.json
 | `agentId` | number | 应用 AgentId |
 | `apiBaseUrl` | string | 企微 API 地址（默认 `https://qyapi.weixin.qq.com`） |
 | `webhookPath` | string | 企微回调路径（默认 `/wecom`） |
+| `clientSecret` | string | 可选，≥32 字符。该账户客户端的共享签名密钥（与客户端 `wsRelaySecret` 一致）；也可作为该账户专属的 `/send` Bearer |
+
+### 每账户认证（hmac-sha256-v1）
+
+旧版只按 `corpId + agentId` 匹配账户——这两个值不是秘密，知道它们的人就能连上并顶掉现有客户端。新版为每个账户配置 `clientSecret`，客户端在 `auth` 消息里附带：
+
+```
+auth_scheme = "hmac-sha256-v1"
+auth_ts     = unix 秒
+auth_nonce  = 16–128 位 [A-Za-z0-9_-]，每次连接新生成
+auth_sig    = hex(HMAC_SHA256(clientSecret,
+                "wecom-relay-auth-v1\n" + user_id + "\n" + wecom_corp_id + "\n" +
+                wecom_agent_id + "\n" + auth_ts + "\n" + auth_nonce))
+```
+
+服务端校验：时间戳在 ±`authMaxSkewSec` 内、nonce 未被使用过（防重放）、签名常量时间比对。签名错误**一律拒绝**，且不会回落到全局 token。签名客户端不再向 relay 发送 `wecom_secret / wecom_token / wecom_aes_key`。
+
+| 情况 | `compat`（默认，过渡期） | `strict` |
+|------|------------------------|----------|
+| 正确签名 | ✅ | ✅ |
+| 错误签名 / 过期 / 重放 | ❌ | ❌ |
+| 账户已配 `clientSecret`，客户端未签名 | ✅ + 警告（`auth_result.warnings`） | ❌ |
+| 账户未配 `clientSecret` | ✅ + 警告 | ❌ |
+
+迁移：① 给每个账户加 `clientSecret`（`authMode` 保持 `compat`）→ ② 客户端配置 `wsRelaySecret` 并升级，日志看到 `auth=hmac-sha256-v1` 且无警告 → ③ 切 `authMode: "strict"`，并按需关闭 `allowGlobalTokenWs` / `allowGlobalTokenSend`。
 
 ### 环境变量
 
@@ -142,6 +171,11 @@ wecom-app-relay --config relay.config.json
 | `WECOM_TOKEN` | `accounts.default.token` |
 | `WECOM_AES_KEY` | `accounts.default.encodingAESKey` |
 | `WECOM_WEBHOOK_PATH` | `accounts.default.webhookPath` |
+| `WECOM_RELAY_CLIENT_SECRET` | `accounts.default.clientSecret` |
+| `RELAY_AUTH_MODE` | `authMode` |
+| `RELAY_AUTH_MAX_SKEW_SEC` | `authMaxSkewSec` |
+| `RELAY_ALLOW_GLOBAL_TOKEN_WS` | `allowGlobalTokenWs` |
+| `RELAY_ALLOW_GLOBAL_TOKEN_SEND` | `allowGlobalTokenSend` |
 
 ## HTTP 端点
 

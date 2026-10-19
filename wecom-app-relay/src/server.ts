@@ -17,6 +17,7 @@ import { createRequire } from "node:module";
 import type { RelayConfig, AccountConfig } from "./config.js";
 import { verifySignature, decrypt } from "./wecom-crypto.js";
 import { sendTextMessage } from "./wecom-api.js";
+import { AUTH_SCHEME, DEFAULT_AUTH_MAX_SKEW_SEC, NonceCache, verifyAuthSignature } from "./auth.js";
 
 const require = createRequire(import.meta.url);
 const { version: SERVER_VERSION } = require("../package.json") as { version: string };
@@ -107,6 +108,11 @@ export function createRelayServer(config: RelayConfig) {
   const clients = new Map<string, ConnectedClient>();
   const accountToClient = new Map<string, string>(); // accountKey → sessionId
   const offlineBuffer = new Map<string, BufferedMessage[]>(); // accountId → buffered messages
+  const authMode = config.authMode ?? "compat";
+  const authMaxSkewSec = config.authMaxSkewSec ?? DEFAULT_AUTH_MAX_SKEW_SEC;
+  const allowGlobalTokenWs = config.allowGlobalTokenWs ?? true;
+  const allowGlobalTokenSend = config.allowGlobalTokenSend ?? true;
+  const nonceCache = new NonceCache();
 
   const log = (msg: string) => console.log(`[relay] ${msg}`);
   const error = (msg: string) => console.error(`[relay] ${msg}`);
@@ -277,27 +283,81 @@ export function createRelayServer(config: RelayConfig) {
         return;
       }
 
-      // Match account by credentials
+      // ── Account matching & authentication ──
+      // 1. corpId+agentId selects candidate accounts (lsbot-compatible).
+      // 2. Each candidate is then authenticated with its own clientSecret (HMAC v1).
+      //    corpId/agentId alone are NOT secrets; in "compat" mode they are still
+      //    accepted (with a warning) for migration, in "strict" mode they are not.
+      // 3. Only when no account matches corpId+agentId do we consider the global
+      //    authToken (grants all accounts; can be disabled via allowGlobalTokenWs=false).
       const matchedAccountIds = new Set<string>();
+      const warnings: string[] = [];
+      let authVersion: "hmac-sha256-v1" | "legacy" | "global-token" = "legacy";
       const corpId = String(msg.wecom_corp_id ?? "");
       const agentIdStr = String(msg.wecom_agent_id ?? "");
+      const sig = typeof msg.auth_sig === "string" ? msg.auth_sig : "";
+      const authTs = msg.auth_ts as number | string | undefined;
+      const authNonce = typeof msg.auth_nonce === "string" ? msg.auth_nonce : "";
 
-      if (corpId && agentIdStr) {
-        // lsbot-style: match by corp_id + agent_id
-        for (const [aid, acfg] of Object.entries(config.accounts)) {
-          if (acfg.corpId === corpId && String(acfg.agentId) === agentIdStr) {
+      const candidates: Array<[string, AccountConfig]> = corpId && agentIdStr
+        ? Object.entries(config.accounts).filter(
+            ([, acfg]) => acfg.corpId === corpId && String(acfg.agentId) === agentIdStr,
+          )
+        : [];
+
+      const rejectReasons: string[] = [];
+      for (const [aid, acfg] of candidates) {
+        if (acfg.clientSecret) {
+          if (sig) {
+            const result = verifyAuthSignature({
+              secret: acfg.clientSecret,
+              accountId: aid,
+              input: { userId, corpId, agentId: agentIdStr, ts: authTs ?? "", nonce: authNonce },
+              signature: sig,
+              maxSkewSec: authMaxSkewSec,
+              nonceCache,
+            });
+            if (result.ok) {
+              matchedAccountIds.add(aid);
+              authVersion = AUTH_SCHEME;
+            } else {
+              rejectReasons.push(`[${aid}] ${result.reason}`);
+            }
+          } else if (authMode === "compat") {
             matchedAccountIds.add(aid);
+            warnings.push(`account ${aid}: unsigned auth accepted in compat mode; configure the per-account relay secret on the client`);
+          } else {
+            rejectReasons.push(`[${aid}] signature required (strict mode)`);
           }
+        } else if (authMode === "compat") {
+          matchedAccountIds.add(aid);
+          warnings.push(`account ${aid}: no clientSecret configured on relay; corpId+agentId-only auth is deprecated`);
+        } else {
+          rejectReasons.push(`[${aid}] no clientSecret configured (strict mode)`);
         }
       }
 
+      if (candidates.length > 0 && matchedAccountIds.size === 0) {
+        // corpId+agentId matched but authentication failed: never fall back to the global token.
+        log(`auth rejected: user=${userId} reasons=${rejectReasons.join("; ")}`);
+        ws.send(JSON.stringify({ type: "auth_result", success: false, error: "invalid credentials" }));
+        ws.close(1008, "auth failed");
+        return;
+      }
+
       // If no credential match, try auth token
-      if (matchedAccountIds.size === 0) {
+      if (candidates.length === 0) {
         const token = String(msg.token ?? msg.auth_token ?? "");
         if (token && safeCompare(token, config.authToken)) {
-          // Token auth: grant access to all accounts
-          for (const aid of Object.keys(config.accounts)) {
-            matchedAccountIds.add(aid);
+          if (!allowGlobalTokenWs) {
+            log(`auth rejected: user=${userId} global authToken login disabled (allowGlobalTokenWs=false)`);
+          } else {
+            // Token auth: grant access to all accounts
+            for (const aid of Object.keys(config.accounts)) {
+              matchedAccountIds.add(aid);
+            }
+            authVersion = "global-token";
+            warnings.push("global authToken login grants all accounts and displaces their clients; prefer per-account auth");
           }
         }
       }
@@ -307,6 +367,8 @@ export function createRelayServer(config: RelayConfig) {
         ws.close(1008, "auth failed");
         return;
       }
+
+      for (const w of warnings) log(`auth warning: user=${userId} ${w}`);
 
       const sessionId = `sess_${crypto.randomBytes(16).toString("hex")}`;
       client = {
@@ -335,14 +397,16 @@ export function createRelayServer(config: RelayConfig) {
       }
 
       clients.set(sessionId, client);
-      log(`client authenticated: session=${sessionId} user=${userId} accounts=[${[...matchedAccountIds].join(",")}]`);
+      log(`client authenticated: session=${sessionId} user=${userId} auth=${authVersion} accounts=[${[...matchedAccountIds].join(",")}]`);
 
       ws.send(JSON.stringify({
         type: "auth_result",
         success: true,
         session_id: sessionId,
         server_version: SERVER_VERSION,
-        capabilities: { media_proxy: true },
+        capabilities: { media_proxy: true, auth_schemes: [AUTH_SCHEME] },
+        auth_version: authVersion,
+        ...(warnings.length > 0 ? { warnings } : {}),
       }));
 
       // Flush any buffered messages for the authenticated accounts
@@ -510,12 +574,20 @@ export function createRelayServer(config: RelayConfig) {
     const match = /^Bearer\s+(.+)$/i.exec(authHeader);
     const bearerToken = match?.[1] ?? "";
 
-    if (!bearerToken || !safeCompare(bearerToken, config.authToken)) {
+    const isGlobalToken = Boolean(bearerToken) && allowGlobalTokenSend && safeCompare(bearerToken, config.authToken);
+    // A per-account clientSecret is also accepted, but only for that account (checked below).
+    const matchesSomeAccountSecret = Boolean(bearerToken) && Object.values(config.accounts).some(
+      (a) => a.clientSecret && safeCompare(bearerToken, a.clientSecret),
+    );
+    const unauthorized = () => {
       res.writeHead(401, {
         "Content-Type": "application/json",
         "WWW-Authenticate": 'Bearer realm="wecom-app-relay"',
       });
       res.end(JSON.stringify({ ok: false, error: "unauthorized" }));
+    };
+    if (!isGlobalToken && !matchesSomeAccountSecret) {
+      unauthorized();
       return;
     }
 
@@ -552,7 +624,16 @@ export function createRelayServer(config: RelayConfig) {
       return;
     }
 
-    const targetAccount = config.accounts[accountId];
+    const targetAccount = Object.prototype.hasOwnProperty.call(config.accounts, accountId)
+      ? config.accounts[accountId]
+      : undefined;
+    if (!isGlobalToken) {
+      // Account-scoped bearer: must be exactly this account's clientSecret.
+      if (!targetAccount?.clientSecret || !safeCompare(bearerToken, targetAccount.clientSecret)) {
+        unauthorized();
+        return;
+      }
+    }
     if (!targetAccount) {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: "account not found" }));

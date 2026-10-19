@@ -82,6 +82,7 @@ const WecomAppAccountSchema = z.object({
   wsRelayUserId: z.string().optional(),
   wsRelayReconnectMs: z.number().int().positive().optional(),
   wsRelayInsecure: z.boolean().optional(),
+  wsRelaySecret: z.string().min(32).optional(),
 });
 
 export const WecomAppConfigSchema = WecomAppAccountSchema.extend({
@@ -112,6 +113,7 @@ export const WecomAppConfigJsonSchema = {
       wsRelayUserId: { type: "string" },
       wsRelayReconnectMs: { type: "number" },
       wsRelayInsecure: { type: "boolean" },
+      wsRelaySecret: { type: "string" },
       inboundMedia: {
         type: "object",
         additionalProperties: false,
@@ -176,6 +178,8 @@ export const WecomAppConfigJsonSchema = {
             wsRelayWebhookUrl: { type: "string" },
             wsRelayUserId: { type: "string" },
             wsRelayReconnectMs: { type: "number" },
+            wsRelayInsecure: { type: "boolean" },
+            wsRelaySecret: { type: "string" },
             inboundMedia: {
               type: "object",
               additionalProperties: false,
@@ -340,6 +344,7 @@ export function resolveWecomAppAccount(params: { cfg: PluginConfig; accountId?: 
     wsRelayWebhookUrl: merged.wsRelayWebhookUrl?.trim() || undefined,
     wsRelayUserId: merged.wsRelayUserId?.trim() || undefined,
     wsRelayInsecure: merged.wsRelayInsecure ?? false,
+    wsRelaySecret: merged.wsRelaySecret?.trim() || undefined,
   };
 }
 
