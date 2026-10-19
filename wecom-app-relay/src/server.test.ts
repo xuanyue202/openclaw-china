@@ -226,7 +226,7 @@ describe("relay server", () => {
       expect(result.success).toBe(true);
       expect(typeof result.server_version).toBe("string");
       expect((result.server_version as string).length).toBeGreaterThan(0);
-      expect(result.capabilities).toEqual({ media_proxy: true });
+      expect(result.capabilities).toEqual({ media_proxy: true, auth_schemes: ["hmac-sha256-v1"] });
     });
 
     it("accepts lsbot-style credential auth", async () => {

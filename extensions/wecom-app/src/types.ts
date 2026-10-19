@@ -101,6 +101,11 @@ export type WecomAppAccountConfig = {
   wsRelayReconnectMs?: number;
   /** ws-relay 跳过 TLS 证书验证（自签证书场景，默认 false） */
   wsRelayInsecure?: boolean;
+  /**
+   * ws-relay 每账户共享密钥（与 relay 配置 accounts.<id>.clientSecret 相同，≥32 字符）。
+   * 配置后客户端用 HMAC-SHA256 签名 auth，且不再把企微 corpSecret/token/AESKey 发给 relay。
+   */
+  wsRelaySecret?: string;
 };
 
 /**
@@ -152,6 +157,8 @@ export type ResolvedWecomAppAccount = {
   wsRelayUserId?: string;
   /** ws-relay 跳过 TLS 证书验证 */
   wsRelayInsecure?: boolean;
+  /** ws-relay 每账户共享密钥 */
+  wsRelaySecret?: string;
 };
 
 /** 消息发送目标 */

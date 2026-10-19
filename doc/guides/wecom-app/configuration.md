@@ -765,6 +765,7 @@ wecom-app-relay --config relay.config.json
 | `wsRelayUserId` | 连接标识（可选，默认自动生成） |
 | `wsRelayReconnectMs` | 断线重连间隔毫秒（默认 5000） |
 | `wsRelayInsecure` | 跳过 TLS 证书验证（自签证书场景，默认 `false`） |
+| `wsRelaySecret` | 每账户 relay 共享密钥（≥32 字符，与 relay `accounts.<id>.clientSecret` 相同）。配置后用 HMAC 签名认证，且不再把 corpSecret/token/AESKey 发给 relay。自建 wecom-app-relay 推荐配置；连接 bot.lingti.com 等第三方 relay 时不要配置 |
 
 > **注意**：ws-relay 模式下 `corpId`、`corpSecret`、`agentId`、`token`、`encodingAESKey` 全部必填。
 

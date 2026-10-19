@@ -21,6 +21,7 @@ import { dispatchWecomAppMessage } from "./bot.js";
 import { tryGetWecomAppRuntime } from "./runtime.js";
 import { sendWecomAppMessage, stripMarkdown } from "./api.js";
 import { buildWecomTextSendQueueKey, enqueueWecomTextSendTask } from "./text-send-queue.js";
+import { buildRelayAuthSignatureFields, type RelayAuthSignatureFields } from "./relay-auth.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -50,10 +51,11 @@ type RelayAuthMessage = {
   ai_model?: string;
   wecom_corp_id: string;
   wecom_agent_id: string;
-  wecom_secret: string;
-  wecom_token: string;
-  wecom_aes_key: string;
-};
+  /** Legacy lsbot fields. Omitted when a per-account relay secret is configured. */
+  wecom_secret?: string;
+  wecom_token?: string;
+  wecom_aes_key?: string;
+} & Partial<RelayAuthSignatureFields>;
 
 type RelayAuthResult = {
   type: "auth_result";
@@ -61,7 +63,9 @@ type RelayAuthResult = {
   session_id?: string;
   error?: string;
   server_version?: string;
-  capabilities?: { media_proxy?: boolean };
+  capabilities?: { media_proxy?: boolean; auth_schemes?: string[] };
+  auth_version?: string;
+  warnings?: string[];
 };
 
 type RelayWecomRaw = {
@@ -255,9 +259,13 @@ export async function startWecomAppWsRelayClient(opts: {
   const userId = account.wsRelayUserId || `openclaw-${account.accountId}-${crypto.randomBytes(4).toString("hex")}`;
   const reconnectBaseMs = account.config.wsRelayReconnectMs ?? INITIAL_RECONNECT_MS;
   const insecure = account.wsRelayInsecure ?? false;
+  const relaySecret = account.wsRelaySecret;
 
   if (insecure) {
     logger.info("TLS certificate verification disabled (wsRelayInsecure=true)");
+  }
+  if (!relaySecret) {
+    logger.warn("wsRelaySecret not configured: using legacy relay auth (corpId+agentId only). Configure a per-account relay secret.");
   }
 
   if (!account.corpId || !account.corpSecret || !account.token || !account.encodingAESKey || account.agentId == null) {
@@ -333,17 +341,31 @@ export async function startWecomAppWsRelayClient(opts: {
         logger.info("ws connected, sending auth");
         setStatus?.({ connectionState: "authenticating" });
 
-        const authMsg: RelayAuthMessage = {
-          type: "auth",
+        const authBase = {
+          type: "auth" as const,
           user_id: userId,
-          platform: "wecom",
+          platform: "wecom" as const,
           client_version: CLIENT_VERSION,
           wecom_corp_id: account.corpId!,
           wecom_agent_id: String(account.agentId),
-          wecom_secret: account.corpSecret!,
-          wecom_token: account.token!,
-          wecom_aes_key: account.encodingAESKey!,
         };
+        // With a per-account relay secret: sign the auth (HMAC, fresh nonce/ts per attempt)
+        // and do NOT send WeCom app secrets to the relay. Without one: legacy lsbot auth.
+        const authMsg: RelayAuthMessage = relaySecret
+          ? {
+              ...authBase,
+              ...buildRelayAuthSignatureFields(relaySecret, {
+                userId,
+                corpId: authBase.wecom_corp_id,
+                agentId: authBase.wecom_agent_id,
+              }),
+            }
+          : {
+              ...authBase,
+              wecom_secret: account.corpSecret!,
+              wecom_token: account.token!,
+              wecom_aes_key: account.encodingAESKey!,
+            };
 
         ws.send(JSON.stringify(authMsg));
 
@@ -429,7 +451,11 @@ export async function startWecomAppWsRelayClient(opts: {
         sessionId = msg.session_id ?? "";
         reconnectDelay = reconnectBaseMs;
         const serverVer = msg.server_version ? ` server=${msg.server_version}` : "";
-        logger.info(`auth success, sessionId=${sessionId}${serverVer}`);
+        const authVer = msg.auth_version ? ` auth=${msg.auth_version}` : "";
+        logger.info(`auth success, sessionId=${sessionId}${serverVer}${authVer}`);
+        for (const w of msg.warnings ?? []) {
+          logger.warn(`relay auth warning: ${w}`);
+        }
         setStatus?.({
           connectionState: "connected",
           running: true,

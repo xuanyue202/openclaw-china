@@ -4,5 +4,12 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["index.ts", "src"]
+  "include": [
+    "index.ts",
+    "src"
+  ],
+  "exclude": [
+    "src/ws-relay-e2e.test.ts",
+    "src/relay-auth.test.ts"
+  ]
 }
