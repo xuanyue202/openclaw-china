@@ -268,3 +268,23 @@ export type WecomAppInboundMessage =
   | WecomAppInboundStreamRefresh
   | WecomAppInboundEvent
   | (WecomAppInboundBase & Record<string, unknown>);
+
+/**
+ * Correlated ws-relay acceptance evidence (PATCH12).
+ * Proves the relay accepted/forwarded the request with this request id;
+ * it is NOT a WeCom platform message id and NOT proof of read/delivery.
+ */
+export type WsRelayTransportAck = {
+  kind: "wecom-relay-send-result";
+  requestId: string;
+  accepted: true;
+};
+
+/** Result of a ws-relay send_message (PATCH12 semantics). */
+export type WsRelaySendOutcome = {
+  ok: boolean;
+  errcode?: number;
+  errmsg?: string;
+  msgid?: string;
+  transportAck?: WsRelayTransportAck;
+};
