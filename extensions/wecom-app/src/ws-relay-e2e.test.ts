@@ -34,6 +34,8 @@ import { sendTextMessage } from "../../../wecom-app-relay/src/wecom-api.js";
 import type { RelayConfig, AccountConfig } from "../../../wecom-app-relay/src/config.js";
 import { resolveWecomAppAccount, type PluginConfig } from "./config.js";
 import { startWecomAppWsRelayClient, sendViaWsRelay } from "./ws-relay-client.js";
+import { sendWecomAppMessage } from "./api.js";
+import { wecomAppPlugin } from "./channel.js";
 
 const mockSendText = vi.mocked(sendTextMessage);
 
@@ -102,8 +104,8 @@ type Started = {
   done: Promise<void>;
 };
 
-function startClient(port: number, opts: { agentId: number; secret?: string; userId: string }): Started {
-  const cfg: PluginConfig = {
+function clientCfg(port: number, opts: { agentId: number; secret?: string; userId: string }): PluginConfig {
+  return {
     channels: {
       "wecom-app": {
         mode: "ws-relay",
@@ -117,6 +119,10 @@ function startClient(port: number, opts: { agentId: number; secret?: string; use
       },
     },
   } as PluginConfig;
+}
+
+function startClient(port: number, opts: { agentId: number; secret?: string; userId: string }): Started {
+  const cfg = clientCfg(port, opts);
   const account = resolveWecomAppAccount({ cfg });
   const logs: string[] = [];
   const statuses: Record<string, unknown>[] = [];
@@ -266,4 +272,64 @@ describe("e2e: relay per-account auth + ws-relay-client", () => {
     expect(authMsg.wecom_aes_key).toBeUndefined();
     expect(JSON.stringify(authMsg)).not.toContain(SECRET_A);
   }, 10000);
+});
+
+describe("e2e: PATCH12 relay send semantics (real relay + real client)", () => {
+  let relay: ReturnType<typeof createRelayServer> | null = null;
+  const clients: Started[] = [];
+
+  afterEach(async () => {
+    for (const c of clients) c.abort.abort();
+    await Promise.all(clients.map((c) => Promise.race([c.done, new Promise((r) => setTimeout(r, 1500))])));
+    clients.length = 0;
+    if (relay) { await relay.stop(); relay = null; }
+    mockSendText.mockClear();
+  });
+
+  async function boot() {
+    mockSendText.mockReset();
+    mockSendText.mockResolvedValue({ ok: true, errcode: 0, errmsg: "ok" });
+    relay = createRelayServer(relayConfig({ authMode: "strict" }));
+    await relay.start();
+    const addr = relay.server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    const opts = { agentId: AGENT_A, secret: SECRET_A, userId: "p12" };
+    const c = startClient(port, opts);
+    clients.push(c);
+    await waitUntil(() => connected(c), 5000, "connected");
+    return { port, cfg: clientCfg(port, opts) };
+  }
+
+  it("success: send_message returns correlated transportAck (not a platform msgid)", async () => {
+    await boot();
+    const r = await sendViaWsRelay({ channelId: "Chen", text: "p12-ok" });
+    expect(r?.ok).toBe(true);
+    expect(r?.transportAck).toMatchObject({ kind: "wecom-relay-send-result", accepted: true });
+    expect(r?.transportAck?.requestId).toMatch(/^send_/);
+    expect(r?.msgid).toBeUndefined();
+  }, 15000);
+
+  it("relay-side failure is final: sendWecomAppMessage returns ok:false and does NOT fall back to direct HTTP", async () => {
+    const { cfg } = await boot();
+    mockSendText.mockResolvedValueOnce({ ok: false, errcode: 81013, errmsg: "user invalid" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const account = resolveWecomAppAccount({ cfg });
+    const r = await sendWecomAppMessage(account, { userId: "Chen" }, "p12-fail");
+    expect(r).toMatchObject({ ok: false, errcode: 81013, errmsg: "user invalid" });
+    expect(r.transportAck).toBeUndefined();
+    expect(mockSendText).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes("qyapi"))).toHaveLength(0);
+    fetchSpy.mockRestore();
+  }, 15000);
+
+  it("outbound.sendText: success carries transportAck; provider failure throws (not ok:false)", async () => {
+    const { cfg } = await boot();
+    const ok = await wecomAppPlugin.outbound.sendText({ cfg, to: "user:Chen", text: "p12-channel-ok" });
+    expect(ok).toMatchObject({ channel: "wecom-app", ok: true });
+    expect(ok.transportAck?.accepted).toBe(true);
+
+    mockSendText.mockResolvedValueOnce({ ok: false, errcode: 81013, errmsg: "user invalid" });
+    await expect(wecomAppPlugin.outbound.sendText({ cfg, to: "user:Chen", text: "p12-channel-fail" }))
+      .rejects.toThrow("user invalid");
+  }, 15000);
 });

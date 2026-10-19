@@ -17,7 +17,7 @@ import {
 import { registerWecomAppWebhookTarget, splitMessageByBytes } from "./monitor.js";
 import { startWecomAppWsRelayClient } from "./ws-relay-client.js";
 import { setWecomAppRuntime } from "./runtime.js";
-import { sendWecomAppMessage, stripMarkdown, downloadAndSendImage, downloadAndSendVoice, downloadAndSendFile, downloadAndSendVideo } from "./api.js";
+import { sendWecomAppMessage, stripMarkdown, downloadAndSendImage, downloadAndSendVoice, downloadAndSendFile, downloadAndSendVideo, type SendMessageResult } from "./api.js";
 import { buildWecomTextSendQueueKey, enqueueWecomTextSendTask } from "./text-send-queue.js";
 import { isWecomAudioMimeType, isWecomAudioSource, shouldTranscodeWecomVoice } from "./voice.js";
 
@@ -395,6 +395,8 @@ export const wecomAppPlugin = {
       ok: boolean;
       messageId: string;
       error?: Error;
+      /** PATCH12: ws-relay acceptance evidence (not a platform message id). */
+      transportAck?: SendMessageResult["transportAck"];
     }> => {
       // 1. 先解析 target
       const parsed = parseDirectTarget(params.to);
@@ -456,7 +458,7 @@ export const wecomAppPlugin = {
         }
         const queueKey = buildWecomTextSendQueueKey(account.accountId, target.userId);
         const lastResult = await enqueueWecomTextSendTask(queueKey, async () => {
-          let queuedResult: { ok: boolean; msgid?: string; errcode?: number; errmsg?: string } | undefined;
+          let queuedResult: SendMessageResult | undefined;
           for (let i = 0; i < chunks.length; i++) {
             queuedResult = await sendWecomAppMessage(account, target, chunks[i]);
             if (!queuedResult.ok) {
@@ -470,19 +472,17 @@ export const wecomAppPlugin = {
           }
           return queuedResult!;
         });
+        // PATCH12: surface provider failures to the caller (throw) instead of returning ok:false,
+        // and preserve positive relay evidence (transportAck) on success.
+        if (lastResult?.ok !== true) throw new Error(lastResult?.errmsg ?? "send failed");
         return {
           channel: "wecom-app",
-          ok: lastResult.ok,
+          ok: true,
           messageId: lastResult.msgid ?? "",
-          error: lastResult.ok ? undefined : new Error(lastResult.errmsg ?? "send failed"),
+          transportAck: lastResult.transportAck,
         };
       } catch (err) {
-        return {
-          channel: "wecom-app",
-          ok: false,
-          messageId: "",
-          error: err instanceof Error ? err : new Error(String(err)),
-        };
+        throw err instanceof Error ? err : new Error(String(err));
       }
     },
 

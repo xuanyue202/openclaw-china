@@ -11,6 +11,7 @@ import {
 } from "./config.js";
 import { withRetry, type RetryOptions } from "@xuanyue202/shared";
 import { isWsRelayOutboundActive, sendViaWsRelay, getWsRelayMediaProxy } from "./ws-relay-client.js";
+import type { WsRelayTransportAck } from "./types.js";
 import https from "node:https";
 import { mkdir, writeFile, unlink, rename, copyFile, readdir, stat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { basename, join, extname } from "node:path";
@@ -375,6 +376,8 @@ export type SendMessageResult = {
   invalidparty?: string;
   invalidtag?: string;
   msgid?: string;
+  /** ws-relay acceptance evidence (not a platform message id, not read/delivery proof). */
+  transportAck?: WsRelayTransportAck;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -672,11 +675,15 @@ export async function sendWecomAppMessage(
   // In ws-relay mode, route through the relay WebSocket to avoid IP whitelist issues
   if (account.mode === "ws-relay" && isWsRelayOutboundActive()) {
     const relayResult = await sendViaWsRelay({ channelId: target.userId, text });
+    // PATCH12: once dispatched over the relay, never blindly replay over HTTP (e.g. on timeout);
+    // a relay result — success or failure — is final for this send.
     if (relayResult) {
       return {
-        ok: relayResult.ok,
+        ok: relayResult.ok === true,
         errcode: relayResult.errcode,
         errmsg: relayResult.errmsg,
+        msgid: relayResult.msgid,
+        transportAck: relayResult.transportAck,
       };
     }
     // relayResult === null means relay not available, fall through to direct API
@@ -736,11 +743,15 @@ export async function sendWecomAppMarkdownMessage(
   // In ws-relay mode, route through relay (send as plain text since relay only supports text)
   if (account.mode === "ws-relay" && isWsRelayOutboundActive()) {
     const relayResult = await sendViaWsRelay({ channelId: target.userId, text: markdownContent });
+    // PATCH12: once dispatched over the relay, never blindly replay over HTTP (e.g. on timeout);
+    // a relay result — success or failure — is final for this send.
     if (relayResult) {
       return {
-        ok: relayResult.ok,
+        ok: relayResult.ok === true,
         errcode: relayResult.errcode,
         errmsg: relayResult.errmsg,
+        msgid: relayResult.msgid,
+        transportAck: relayResult.transportAck,
       };
     }
   }

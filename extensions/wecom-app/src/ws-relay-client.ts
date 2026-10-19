@@ -12,7 +12,7 @@ import https from "node:https";
 import { WebSocket } from "ws";
 import { createLogger, type Logger } from "@xuanyue202/shared";
 
-import type { ResolvedWecomAppAccount, WecomAppInboundMessage } from "./types.js";
+import type { ResolvedWecomAppAccount, WecomAppInboundMessage, WsRelayTransportAck, WsRelaySendOutcome } from "./types.js";
 import type { PluginConfig } from "./config.js";
 import type { WecomAppRuntimeEnv } from "./monitor.js";
 import { verifyWecomAppSignature, decryptWecomAppEncrypted } from "./crypto.js";
@@ -90,7 +90,19 @@ type RelayMessage = {
 
 type RelayPing = { type: "ping" };
 type RelayError = { type: "error"; code: string; message: string };
-type RelaySendResult = { type: "send_result"; id: string; ok: boolean; errcode?: number; errmsg?: string };
+type RelaySendResult = {
+  type: "send_result";
+  id: string;
+  ok: boolean;
+  errcode?: number;
+  errmsg?: string;
+  /** Platform message id, if the relay forwards one (field name varies by relay). */
+  msgid?: string;
+  message_id?: string;
+  messageId?: string;
+};
+
+export type { WsRelayTransportAck, WsRelaySendOutcome };
 
 type RelayInbound = RelayAuthResult | RelayWecomRaw | RelayMessage | RelayPing | RelayError | RelaySendResult;
 
@@ -110,7 +122,7 @@ type RelayResponsePayload = {
 type RelaySendFn = (params: {
   channelId: string;
   text: string;
-}) => Promise<{ ok: boolean; errcode?: number; errmsg?: string }>;
+}) => Promise<WsRelaySendOutcome>;
 
 let activeRelaySender: RelaySendFn | null = null;
 
@@ -149,9 +161,32 @@ export function getWsRelayMediaProxy(): {
 export async function sendViaWsRelay(params: {
   channelId: string;
   text: string;
-}): Promise<{ ok: boolean; errcode?: number; errmsg?: string } | null> {
+}): Promise<WsRelaySendOutcome | null> {
   if (!activeRelaySender) return null;
   return activeRelaySender(params);
+}
+
+/**
+ * PATCH12: interpret a relay `send_result`.
+ * - accepted only when ok === true and errcode is absent or 0 (truthy/non-boolean ok is not enough)
+ * - correlated relay acceptance is recorded as `transportAck`, never as a platform message id
+ */
+export function buildWsRelaySendOutcome(
+  msg: RelaySendResult,
+  logger?: Pick<Logger, "info">,
+): WsRelaySendOutcome {
+  const accepted = msg.ok === true && (msg.errcode == null || msg.errcode === 0);
+  const platformId = msg.msgid ?? msg.message_id ?? msg.messageId;
+  logger?.info(
+    `[wecom-app] relay send_result requestId=${msg.id} accepted=${accepted} platformId=${platformId ? "present" : "absent"} errcode=${typeof msg.errcode === "number" ? msg.errcode : "absent"}`,
+  );
+  return {
+    ok: accepted,
+    errcode: msg.errcode,
+    errmsg: msg.errmsg,
+    msgid: platformId,
+    transportAck: accepted ? { kind: "wecom-relay-send-result", requestId: msg.id, accepted: true } : undefined,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -307,7 +342,7 @@ export async function startWecomAppWsRelayClient(opts: {
 
       // Pending outbound request callbacks (keyed by request id)
       const pendingSendRequests = new Map<string, {
-        resolve: (result: { ok: boolean; errcode?: number; errmsg?: string }) => void;
+        resolve: (result: WsRelaySendOutcome) => void;
         timer: ReturnType<typeof setTimeout>;
       }>();
 
@@ -514,7 +549,7 @@ export async function startWecomAppWsRelayClient(opts: {
         if (pending) {
           clearTimeout(pending.timer);
           pendingSendRequests.delete(msg.id);
-          pending.resolve({ ok: msg.ok, errcode: msg.errcode, errmsg: msg.errmsg });
+          pending.resolve(buildWsRelaySendOutcome(msg, logger));
         }
       }
 
